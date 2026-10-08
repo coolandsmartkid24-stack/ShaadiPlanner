@@ -41,6 +41,78 @@ function Field({ label, hint, children }) {
   );
 }
 
+/* Stroke icons on one 24x24 grid, coloured by the surrounding text: the quotation reads as
+   sections instead of a wall of uppercase labels. */
+const ICONS = {
+  venue: (
+    <>
+      <path d="M3 21h18" />
+      <path d="M5 21V8l7-4 7 4v13" />
+      <path d="M9 21v-6h6v6" />
+      <path d="M9.5 10h.01M14.5 10h.01" />
+    </>
+  ),
+  user: (
+    <>
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </>
+  ),
+  event: <path d="M12 3l1.9 4.9L19 9l-4 3.5 1.2 5.5L12 15.4 7.8 18l1.2-5.5L5 9l5.1-1.1z" />,
+  calendar: (
+    <>
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M16 2v4M8 2v4M3 10h18" />
+    </>
+  ),
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </>
+  ),
+  users: (
+    <>
+      <path d="M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9.5" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </>
+  ),
+  bowl: (
+    <>
+      <path d="M3 11h18a9 9 0 0 1-18 0z" />
+      <path d="M7 11a5 5 0 0 1 10 0" />
+      <path d="M12 3v3" />
+    </>
+  ),
+  check: (
+    <>
+      <path d="M9 11l3 3 8-8" />
+      <path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
+    </>
+  ),
+  tick: <path d="M20 6L9 17l-5-5" />,
+  note: (
+    <>
+      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+      <path d="M14 3v6h6" />
+      <path d="M8 13h8M8 17h5" />
+    </>
+  ),
+  phone: (
+    <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z" />
+  ),
+};
+
+function Ico({ n, s = 15 }) {
+  return (
+    <svg viewBox="0 0 24 24" width={s} height={s} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {ICONS[n]}
+    </svg>
+  );
+}
+
 /* ---------- step 1: the event ---------- */
 function StepEvent({ q, set }) {
   const wk = ["Friday", "Saturday", "Sunday"].includes(dayName(q.event_date));
@@ -146,9 +218,6 @@ function StepEvent({ q, set }) {
             </button>
           </div>
         </div>
-        <Field label="Your total budget (Rs)">
-          <input type="number" inputMode="numeric" min="0" max="1000000000" step="10000" value={q.budget} onChange={(e) => set({ budget: e.target.value === "" ? "" : +e.target.value })} onBlur={(e) => set({ budget: clamp(+e.target.value, 0, 1_000_000_000, 0) })} />
-        </Field>
       </div>
     </div>
   );
@@ -320,10 +389,26 @@ function StepServices({ q, set }) {
 
 /* ---------- the quotation document (same layout the PDF uses) ---------- */
 function Doc({ q, user }) {
-  const row = (a, b) => (
+  const row = (n, a, b) => (
     <div className="dr">
-      <span>{a}</span>
+      <span>
+        <Ico n={n} />
+        {a}
+      </span>
       <b>{b}</b>
+    </div>
+  );
+  // Services and dishes are choices, so they are shown as the choices that were made rather
+  // than as a comma-separated string.
+  const chips = (list) => (
+    <div className="doc-chips">
+      {list.map((x) => (
+        <span className="doc-chip" key={x}>
+          <Ico n="tick" s={12} />
+          {x}
+        </span>
+      ))}
+      {!list.length && <span className="doc-v">None selected</span>}
     </div>
   );
   const hall = q.halls[0];
@@ -336,9 +421,15 @@ function Doc({ q, user }) {
           <small>{new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</small>
         </div>
       </div>
-      <p className="doc-k">Prepared for</p>
+      <p className="doc-k">
+        <Ico n="venue" />
+        Prepared for
+      </p>
       <p className="doc-v">{hall ? hall.name : "Your chosen hall"}</p>
-      <p className="doc-k">From</p>
+      <p className="doc-k">
+        <Ico n="user" />
+        From
+      </p>
       <p className="doc-v">
         {q.host || user.name} · {user.phone}
       </p>
@@ -348,28 +439,34 @@ function Doc({ q, user }) {
         availability.
       </p>
       <div className="dt">
-        {row("Event", q.event_type + (q.title ? ` · ${q.title}` : ""))}
-        {row("Date and day", niceDate(q.event_date) + (q.event_date ? ` · ${dayName(q.event_date)}` : ""))}
-        {row("Time", `${q.slot} · ${q.time}`)}
-        {row("Number of persons", Number(q.guests || 0).toLocaleString("en-IN"))}
-        {row("My budget", money(q.budget))}
+        {row("event", "Event", q.event_type + (q.title ? ` · ${q.title}` : ""))}
+        {row("calendar", "Date and day", niceDate(q.event_date) + (q.event_date ? ` · ${dayName(q.event_date)}` : ""))}
+        {row("clock", "Time", `${q.slot} · ${q.time}`)}
+        {row("users", "Number of persons", Number(q.guests || 0).toLocaleString("en-IN"))}
       </div>
-      <p className="doc-k">Services wanted</p>
-      <p className="doc-v">{q.services.join(", ") || "None selected"}</p>
-      <p className="doc-k">Food menu</p>
-      <ul className="doc-l">
-        {q.menu.map((m) => (
-          <li key={m}>{m}</li>
-        ))}
-        {!q.menu.length && <li>Not decided yet</li>}
-      </ul>
+      <p className="doc-k">
+        <Ico n="check" />
+        Services wanted
+      </p>
+      {chips(q.services)}
+      <p className="doc-k">
+        <Ico n="bowl" />
+        Food menu
+      </p>
+      {chips(q.menu)}
       {q.notes && (
         <>
-          <p className="doc-k">Notes</p>
+          <p className="doc-k">
+            <Ico n="note" />
+            Notes
+          </p>
           <p className="doc-v">{q.notes}</p>
         </>
       )}
-      <p className="doc-f">Please reply on WhatsApp {user.phone}. Thank you.</p>
+      <p className="doc-f">
+        <Ico n="phone" />
+        Please reply on WhatsApp {user.phone}. Thank you.
+      </p>
     </article>
   );
 }
@@ -378,7 +475,7 @@ function previewMessage(q, hall, user) {
   return (
     `Assalam o Alaikum ${hall.name} team,\n` +
     `I am ${q.host || user.name}. I am planning a ${q.event_type} on ${dayName(q.event_date)}, ${niceDate(q.event_date)} ` +
-    `(${q.slot}, ${q.time}) for ${q.guests} guests with a budget of ${money(q.budget)}.\n` +
+    `(${q.slot}, ${q.time}) for ${q.guests} guests.\n` +
     `Kindly see this quotation and let us know: [PDF link added by the app]\nThank you.`
   );
 }
@@ -850,10 +947,6 @@ export default function Wizard({ initial, user, onExit, onUpgraded, toast }) {
             <div>
               <dt>Guests</dt>
               <dd>{Number(q.guests || 0).toLocaleString("en-IN")}</dd>
-            </div>
-            <div>
-              <dt>Budget</dt>
-              <dd>{money(q.budget)}</dd>
             </div>
             <div>
               <dt>Hall</dt>

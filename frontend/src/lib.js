@@ -158,7 +158,6 @@ export function stepError(q, step, allow) {
     if (q.event_date < todayISO()) return "The event date cannot be in the past.";
     if ((q.guests || 0) < LIMITS.guestsMin || (q.guests || 0) > LIMITS.guestsMax)
       return `Number of guests must be between ${LIMITS.guestsMin} and ${LIMITS.guestsMax.toLocaleString("en-IN")}.`;
-    if (!(q.budget > 0)) return "Enter your total budget to continue.";
     if ((q.title || "").length > LIMITS.title) return `Event name is too long (max ${LIMITS.title} characters).`;
     if ((q.host || "").length > LIMITS.host) return `Your name is too long (max ${LIMITS.host} characters).`;
     if (!String(q.time || "").trim()) return "Pick a start time to continue.";

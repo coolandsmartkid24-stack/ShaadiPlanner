@@ -443,8 +443,7 @@ def message(q, hall, phone, link):
     who = q["host"] or ""
     return (f"Assalam o Alaikum {hall['name']} team,\n"
             f"I am {who}. I am planning a {q['event_type']} on {day_name(q['event_date'])}, "
-            f"{nice_date(q['event_date'])} ({q['slot']}, {q['time']}) for {q['guests']} guests "
-            f"with a budget of {money(q['budget'])}.\n"
+            f"{nice_date(q['event_date'])} ({q['slot']}, {q['time']}) for {q['guests']} guests.\n"
             f"Kindly see this quotation and let us know: {link}\n"
             f"Thank you.")
 

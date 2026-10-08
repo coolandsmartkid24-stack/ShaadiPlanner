@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, setSession } from "./api.js";
-import { money, niceDate, fmtWait, initials, planName } from "./lib.js";
+import { niceDate, fmtWait, initials, planName } from "./lib.js";
 import SubscribePlan from "./Subscribe.jsx";
 
 function Logo({ small }) {
@@ -129,7 +129,7 @@ export default function Home({ user, quotes, loading, error, onNew, onOpen, onDe
                 <div className="q-main">
                   <h3>{q.title || `${q.event_type} quotation`}</h3>
                   <p>
-                    {niceDate(q.event_date)} · {q.slot} · {q.guests} guests · {money(q.budget)}
+                    {niceDate(q.event_date)} · {q.slot} · {q.guests} guests
                   </p>
                   <p className="muted">{q.halls.length ? q.halls.map((h) => h.name).join(", ") : "No hall chosen yet"}</p>
                 </div>
