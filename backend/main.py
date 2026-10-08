@@ -747,7 +747,7 @@ def _pdf_response(q: dict, who: dict) -> Response:
     data = pdfquote.quotation_pdf(q, qdb.hall(ids[0]) if ids else None,
                                   {"name": who.get("name") or "", "phone": who.get("phone") or ""})
     return Response(data, media_type="application/pdf",
-                    headers={"Content-Disposition": 'attachment; filename="Quotation.pdf"'})
+                    headers={"Content-Disposition": 'attachment; filename="Shaadi_Quotation.pdf"'})
 
 def signed_url(request: Request, qid: str):
     """A link the hall can open without an account, valid 30 days. The expiry rides inside sig

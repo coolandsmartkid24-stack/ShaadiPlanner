@@ -102,16 +102,52 @@ export const api = {
   pdf: (id) => req(`/api/quotations/${id}/pdf`, { blob: true }),
 };
 
-export async function downloadPdf(id, title) {
-  const blob = await api.pdf(id);
+function saveBlob(blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${String(title || "Quotation").replace(/[\\/:*?"<>|]+/g, " ").trim() || "Quotation"}.pdf`;
+  a.download = "Shaadi_Quotation.pdf";
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+// The download IS the preview: the wizard's rendered document is captured in the browser and
+// written into the PDF, so what lands on disk is exactly what was on screen - not a second,
+// server-drawn copy of it. The fixed name is not derived from the quotation in any way.
+async function previewPdf(node) {
+  const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import("html2canvas"), import("jspdf")]);
+  // currentColor inside an inline SVG does not survive the capture - bake the computed
+  // colour into each icon first so the tick and the section icons keep their colours.
+  node.querySelectorAll("svg").forEach((s) => {
+    s.style.color = getComputedStyle(s).color;
+  });
+  const canvas = await html2canvas(node, { backgroundColor: "#ffffff", scale: 2, useCORS: true });
+  const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const pw = pdf.internal.pageSize.getWidth();
+  const ph = pdf.internal.pageSize.getHeight();
+  const img = canvas.toDataURL("image/jpeg", 0.95);
+  const imgH = (canvas.height * pw) / canvas.width;
+  let position = 0;
+  let left = imgH;
+  pdf.addImage(img, "JPEG", 0, position, pw, imgH);
+  for (left -= ph; left > 0; left -= ph) {
+    position -= ph;
+    pdf.addPage();
+    pdf.addImage(img, "JPEG", 0, position, pw, imgH);
+  }
+  return pdf.output("blob");
+}
+
+export async function downloadPdf(node, id) {
+  try {
+    saveBlob(await previewPdf(node));
+  } catch {
+    // Capture failed (old browser, blocked font): the server's copy still downloads,
+    // under the very same fixed name.
+    saveBlob(await api.pdf(id));
+  }
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

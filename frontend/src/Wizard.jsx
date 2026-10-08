@@ -745,7 +745,7 @@ export default function Wizard({ initial, user, onExit, onUpgraded, toast }) {
   const download = async () => {
     try {
       await flush();
-      await downloadPdf(q.id, q.title || `${q.event_type} quotation`);
+      await downloadPdf(document.querySelector("article.doc"), q.id);
       toast("PDF downloaded.");
     } catch (e) {
       toast(e.message, "error");
