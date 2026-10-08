@@ -398,10 +398,38 @@ function previewMessage(q, hall, user) {
    pass checkout any more: the plan lives on the account, not on a quotation. ---------- */
 
 /* ---------- the wizard ---------- */
+
+/* Where the wizard was when the tab was closed. The quotation itself is saved on the server
+   (debounced PATCH below), so only the step number lives here - it is dropped again by exit(),
+   which is the deliberate "Close". A crash or a closed tab keeps it, so nothing is retyped. */
+const stepKey = (id) => `sp.wizard-step.${id || ""}`;
+const readStep = (id) => {
+  try {
+    const n = parseInt(localStorage.getItem(stepKey(id)) || "0", 10);
+    return Number.isFinite(n) && n >= 0 && n <= 4 ? n : 0;
+  } catch {
+    return 0;
+  }
+};
+const saveStep = (id, n) => {
+  try {
+    localStorage.setItem(stepKey(id), String(n));
+  } catch {
+    /* private mode: the wizard still works, it just does not remember the step */
+  }
+};
+const clearStep = (id) => {
+  try {
+    localStorage.removeItem(stepKey(id));
+  } catch {
+    /* ignore */
+  }
+};
+
 export default function Wizard({ initial, user, onExit, onUpgraded, toast }) {
   const [q, setQ] = useState(initial);
   const qRef = useRef(initial);
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(() => readStep(initial.id));
   const [saveState, setSaveState] = useState("");
   const [halls, setHalls] = useState([]);
   const [hallsLoading, setHallsLoading] = useState(true);
@@ -450,6 +478,27 @@ export default function Wizard({ initial, user, onExit, onUpgraded, toast }) {
     clearTimeout(timer.current);
     timer.current = setTimeout(flush, 600);
   };
+
+  /* The tab can disappear mid-typing - closed, crashed, power cut. The debounced save leaves at
+     most 600 ms of slack, so the very last edit is pushed again with keepalive on the way out;
+     the browser finishes that request even though the page is already going away. */
+  const flushNow = () => {
+    const body = pending.current;
+    if (!body) return;
+    pending.current = null;
+    clearTimeout(timer.current);
+    api.update(qRef.current.id, body, true).catch(() => {});
+  };
+
+  useEffect(() => {
+    const bye = () => flushNow();
+    window.addEventListener("pagehide", bye);
+    window.addEventListener("beforeunload", bye);
+    return () => {
+      window.removeEventListener("pagehide", bye);
+      window.removeEventListener("beforeunload", bye);
+    };
+  }, []);
 
   // Server-owned fields only (allowance, pass, status) - never clobbers a still-typing field.
   const applyAllowance = (r) => {
@@ -504,9 +553,21 @@ export default function Wizard({ initial, user, onExit, onUpgraded, toast }) {
     };
   }, []);
 
+  // Remembered across reloads while the quotation is being worked on.
+  useEffect(() => {
+    saveStep(initial.id, step);
+  }, [initial.id, step]);
+
   const exit = async () => {
-    await flush();
+    await flush();                     // whatever was typed is on the server before we leave
+    clearStep(initial.id);
     onExit();
+  };
+
+  // "Save" on the last step: commit now, stay where you are.
+  const saveNow = async () => {
+    await flush();
+    toast("Quotation saved. Close it whenever you are ready.", "success");
   };
 
   const err = stepError(q, step, allow);
@@ -807,9 +868,14 @@ export default function Wizard({ initial, user, onExit, onUpgraded, toast }) {
             Next
           </button>
         ) : (
-          <button className="btn dark big" onClick={exit} disabled={busyNow}>
-            Done
-          </button>
+          <>
+            <button className="btn" onClick={saveNow} disabled={busyNow}>
+              Save
+            </button>
+            <button className="btn dark big" onClick={exit} disabled={busyNow}>
+              Close
+            </button>
+          </>
         )}
       </footer>
     </div>

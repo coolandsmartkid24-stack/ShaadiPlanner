@@ -8,6 +8,8 @@ import Home from "./Home.jsx";
 import Wizard from "./Wizard.jsx";
 
 const PAY_KEY = "sp.pending-payment";   // survives the trip to the gateway and back
+const OPEN_KEY = "sp.open-quotation";   // which quotation the wizard had open (localStorage:
+                                        // it has to come back after a crash or a closed tab)
 
 const readPay = () => {
   try {
@@ -24,6 +26,25 @@ const stashPay = (p) => {
     /* private mode: the confirmation simply has to happen on this page load */
   }
 };
+const readOpen = () => {
+  try {
+    return localStorage.getItem(OPEN_KEY) || "";
+  } catch {
+    return "";
+  }
+};
+const stashOpen = (id) => {
+  try {
+    if (id) localStorage.setItem(OPEN_KEY, id);
+    else localStorage.removeItem(OPEN_KEY);
+  } catch {
+    /* private mode: the wizard still works, it just does not reopen itself */
+  }
+};
+
+// A token that came back with /api/me is the fresh one; an older backend does not send one, so
+// the stored token is kept rather than being overwritten with undefined.
+const keepSession = (m) => ({ ...m, token: m.token || getSession()?.token });
 
 function Splash() {
   return (
@@ -80,6 +101,8 @@ export default function App() {
     notify(String(m || ""), { type: type || "info" });
   }, []);
 
+  // Reloads the list and re-opens whatever quotation the wizard had open when the tab was
+  // closed - the work is already saved on the server, so the place in the wizard is too.
   const refresh = useCallback(async () => {
     if (!getSession()) {
       setQuotes(null);
@@ -87,10 +110,22 @@ export default function App() {
     }
     try {
       setQuotesErr("");
-      setQuotes(await api.quotations());
+      const list = await api.quotations();
+      setQuotes(list);
+      const id = readOpen();
+      if (id) {
+        const hit = (list || []).find((x) => x.id === id);
+        if (hit) setOpen((cur) => cur || hit);
+        else stashOpen("");          // deleted somewhere else: stop trying to reopen it
+      }
     } catch (e) {
       setQuotesErr(e.message);
     }
+  }, []);
+
+  const openQuotation = useCallback((q) => {
+    setOpen(q);
+    stashOpen(q?.id || "");
   }, []);
 
   // A dead/expired token drops the app back to the login screen from anywhere.
@@ -118,7 +153,7 @@ export default function App() {
         if (done.status === "success") {
           const m = await api.me().catch(() => null);
           if (m && m.email) {
-            setSession({ token: getSession()?.token, ...m });
+            setSession(keepSession(m));
             setUser(getSession());
           } else if (!getSession()) {
             setUser(null);          // the token died while we were confirming: log in again
@@ -175,8 +210,8 @@ export default function App() {
       } catch {
         /* 401 already cleared the session; anything else keeps the cached one */
       }
-      if (m) {
-        setSession({ token: getSession()?.token, ...m });
+      if (m && m.email) {
+        setSession(keepSession(m));
         setUser(getSession());
       } else {
         setUser(getSession());
@@ -194,7 +229,7 @@ export default function App() {
     try {
       const q = await api.create(newQuotation(user));
       setQuotes((list) => [q, ...(list || [])]);
-      setOpen(q);
+      openQuotation(q);
     } catch (e) {
       toast(e.message, "error");
     }
@@ -234,6 +269,7 @@ export default function App() {
 
   const handleLogout = () => {
     clearSession();
+    stashOpen("");
     setUser(null);
     setQuotes(null);
     setOpen(null);
@@ -247,7 +283,7 @@ export default function App() {
     if (getSession()) {
       try {
         const m = await api.me();        // the server owns the plan, so read it back
-        if (m && m.email) setSession(m);
+        if (m && m.email) setSession(keepSession(m));
       } catch {
         /* keep the cached copy */
       }
@@ -267,7 +303,20 @@ export default function App() {
         }}
       />
     );
-  else if (open) view = <Wizard initial={open} user={user} onExit={() => { setOpen(null); refresh(); }} onUpgraded={handleUpgraded} toast={toast} />;
+  else if (open)
+    view = (
+      <Wizard
+        initial={open}
+        user={user}
+        onExit={() => {
+          setOpen(null);
+          stashOpen("");            // closed on purpose: the next visit starts at step 1
+          refresh();
+        }}
+        onUpgraded={handleUpgraded}
+        toast={toast}
+      />
+    );
   else
     view = (
       <Home
@@ -276,7 +325,7 @@ export default function App() {
         loading={!quotes && !quotesErr}
         error={quotesErr}
         onNew={handleCreated}
-        onOpen={setOpen}
+        onOpen={openQuotation}
         onDelete={handleDelete}
         onLogout={handleLogout}
         onRetry={refresh}

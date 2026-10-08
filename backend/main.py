@@ -412,9 +412,19 @@ def _me(user: dict) -> dict:
             "next_free_at": qdb.next_free_at(email) if email else 0}
 
 @app.get("/api/me")
-def me(user: dict = Depends(current_user)):
+def me(authorization: Optional[str] = Header(None)):
+    """The account behind the bearer token, plus a re-signed token: the session slides forward
+    on every call, so somebody who keeps coming back is never dropped in the middle of their
+    work. A token that no longer resolves to an account is a 401 (the browser then shows the
+    login screen) instead of a silent fall back to Free with somebody else's allowances."""
     bootstrap()
-    return _me(user)
+    u = current_user(authorization)
+    if authorization and not u.get("email"):
+        raise HTTPException(401, "Your session has expired - log in again")
+    out = _me(u)
+    if u.get("id"):
+        out["token"] = sign({"uid": u["id"], "plan": u["plan"], "exp": time.time() + 7 * 86400})
+    return out
 
 @app.patch("/api/me")
 def patch_me(b: Profile, user: dict = Depends(current_user)):

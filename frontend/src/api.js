@@ -49,13 +49,14 @@ async function detail(r) {
   return `Request failed (${r.status})`;
 }
 
-async function req(path, { method = "GET", body, auth = true, blob = false } = {}) {
+async function req(path, { method = "GET", body, auth = true, blob = false, keepalive = false } = {}) {
   const headers = {};
   if (auth && store?.token) headers.Authorization = `Bearer ${store.token}`;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   let r;
   try {
-    r = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    // keepalive: the tab may be closing - the browser finishes the request anyway.
+    r = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), keepalive });
   } catch {
     throw new Error("Cannot reach the server. Is the backend running on 127.0.0.1:8010?");
   }
@@ -92,7 +93,7 @@ export const api = {
   quotations: () => req("/api/quotations"),
   get: (id) => req(`/api/quotations/${id}`),
   create: (body) => req("/api/quotations", { method: "POST", body }),
-  update: (id, body) => req(`/api/quotations/${id}`, { method: "PATCH", body }),
+  update: (id, body, keepalive = false) => req(`/api/quotations/${id}`, { method: "PATCH", body, keepalive }),
   remove: (id) => req(`/api/quotations/${id}`, { method: "DELETE" }),
 
   // ---- sending: the server owns the allowance and the message wording ----

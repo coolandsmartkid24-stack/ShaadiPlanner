@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "./api.js";
+import { api, setSession } from "./api.js";
 import { money, niceDate, fmtWait, initials, planName } from "./lib.js";
 import SubscribePlan from "./Subscribe.jsx";
 
@@ -22,10 +22,24 @@ export default function Home({ user, quotes, loading, error, onNew, onOpen, onDe
   const [nextFree, setNextFree] = useState(0);
   const [tick, setTick] = useState(0);
 
+  // The free-contact countdown and the session both live here: every 30 s /api/me is asked
+  // again, which re-signs the token (a sliding session - nobody is logged out while they are
+  // using the app), moves the countdown on, and re-renders the Ready / Waiting tag with it.
   useEffect(() => {
     let live = true;
-    api.me().then((m) => live && setNextFree(m.next_free_at || 0)).catch(() => {});
-    const t = setInterval(() => setTick((x) => x + 1), 30000);
+    const pull = () => {
+      api
+        .me()
+        .then((m) => {
+          if (!live || !m) return;
+          if (m.email && m.token) setSession(m);
+          setNextFree(m.next_free_at || 0);
+        })
+        .catch(() => {});
+      setTick((x) => x + 1);
+    };
+    pull();
+    const t = setInterval(pull, 30000);
     return () => {
       live = false;
       clearInterval(t);
@@ -55,8 +69,9 @@ export default function Home({ user, quotes, loading, error, onNew, onOpen, onDe
 
       <section className="welcome">
         <div>
-          <h1>Salam, {first}</h1>
-          <p>Plan your event and ask halls for a quotation.</p>
+          <span className="eyebrow">Salam, {first}</span>
+          <h1>Your Wedding, Your Way</h1>
+          <p>Plan your event and ask halls for a quotation. Everything you do here is saved, so you can close the tab and pick up where you left off.</p>
         </div>
         <button className="btn dark big" onClick={onNew}>
           + New quotation

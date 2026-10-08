@@ -56,6 +56,7 @@ export default function Auth({ onDone }) {
     <div className="auth">
       <div className="auth-l">
         <Logo />
+        <span className="eyebrow">Your Wedding, Your Way</span>
         <h1>Get a hall quotation in 5 minutes.</h1>
         <p>
           Tell us your event, pick a hall, add your menu, and we send a clean PDF quotation
@@ -63,7 +64,8 @@ export default function Auth({ onDone }) {
         </p>
         <ul className="pts">
           <li>Free to start</li>
-          <li>Your quotations are saved</li>
+          <li>Your session and your work are saved</li>
+          <li>Close the tab, come back, carry on</li>
           <li>Download them as PDF anytime</li>
         </ul>
       </div>

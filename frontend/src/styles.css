@@ -16,6 +16,7 @@ button:disabled{cursor:default}
 a{color:inherit}
 :focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 .muted{color:var(--muted)}
+.eyebrow{display:block;font-size:12.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
 .fine{color:var(--muted);font-size:12px;margin:8px 0 0;text-align:center}
 .err{color:var(--low);margin:6px 0 0;font-weight:500;font-size:14px}
 h1{font-weight:800;font-size:clamp(30px,6vw,48px);line-height:1.05;letter-spacing:-.035em;margin:0 0 10px;text-wrap:balance}
