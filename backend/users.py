@@ -1,44 +1,22 @@
-"""SQL user store (SQLite, stdlib only - no new dependencies).
+"""Supabase user store (PostgreSQL through backend/db.py).
 
-Why SQL: signup/login used to mutate an in-memory dict, so every account vanished on restart.
-Records now persist in backend/users.sqlite.
+History: signup/login first mutated an in-memory dict, then persisted in backend/users.sqlite.
+Accounts, plans and phone numbers now live in the Supabase `users` table, so they survive a
+restart and follow the app to any host.
 
 Passwords are never stored in the clear: PBKDF2-HMAC-SHA256 with a per-user random salt.
 No email verification locally (nothing sends mail here) - the row is written straight away,
 which is what "locally no need of verification, but save the record in db" means.
 """
-import hashlib, os, secrets, sqlite3, time
-from pathlib import Path
+import hashlib, secrets, time
 
-DB = Path(os.environ.get("SHAADI_DB", Path(__file__).parent / "users.sqlite"))
+import db
+
+# Every caller shares db's one transaction helper: `with userdb._connect() as c:`.
+_connect = db._connect
+
 ALGO = "pbkdf2_sha256"
 ITERATIONS = 200_000
-
-SCHEMA = """
-create table if not exists users (
-  id            integer primary key autoincrement,
-  name          text    not null default '',
-  email         text    not null unique,
-  phone         text    not null default '',
-  password      text    not null,          -- 'pbkdf2_sha256$<iterations>$<salt>$<hash>'
-  plan          text    not null default 'free',
-  created_at    real    not null,
-  updated_at    real    not null,
-  last_login_at real
-)
-"""
-
-
-def _connect():
-    DB.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(DB, timeout=10)
-    c.row_factory = sqlite3.Row
-    c.execute("pragma journal_mode=wal")
-    c.execute(SCHEMA)
-    # databases created before phone existed gain it here (quotations.py checks too - harmless)
-    if "phone" not in {r[1] for r in c.execute("pragma table_info(users)")}:
-        c.execute("alter table users add column phone text not null default ''")
-    return c
 
 
 def hash_password(password: str) -> str:
@@ -87,16 +65,17 @@ def create(email: str, password: str, name: str = "", phone: str = ""):
     The record is written immediately - no verification step exists locally."""
     email = email.strip().lower()
     now = time.time()
-    with _connect() as c:
-        try:
-            cur = c.execute(
+    try:
+        with _connect() as c:
+            r = c.execute(
                 "insert into users (name, email, phone, password, plan, created_at, updated_at, last_login_at)"
-                " values (?, ?, ?, ?, 'free', ?, ?, ?)",
-                (name.strip(), email, phone.strip(), hash_password(password), now, now, now))
-        except sqlite3.IntegrityError:
+                " values (?, ?, ?, ?, 'free', ?, ?, ?) returning id",
+                (name.strip(), email, phone.strip(), hash_password(password), now, now, now)).fetchone()
+    except Exception as x:
+        if db.unique_violation(x):
             raise ValueError("An account with this email already exists — log in instead")
-        uid = cur.lastrowid
-    return {"id": uid, "name": name.strip(), "email": email, "plan": "free", "created_at": now,
+        raise
+    return {"id": r["id"], "name": name.strip(), "email": email, "plan": "free", "created_at": now,
             "phone": phone.strip()}
 
 
@@ -130,6 +109,30 @@ def set_plan(email: str, plan: str):
     with _connect() as c:
         c.execute("update users set plan = ?, updated_at = ? where email = ?",
                   (plan, time.time(), email.strip().lower()))
+
+
+def set_plan_by_id(user_id, plan: str):
+    with _connect() as c:
+        c.execute("update users set plan = ?, updated_at = ? where id = ?",
+                  (plan, time.time(), user_id))
+
+
+def find_by_id(user_id):
+    with _connect() as c:
+        r = c.execute("select * from users where id = ?", (user_id,)).fetchone()
+    return _row_to_dict(r) if r else None
+
+
+def legacy_plan_migration():
+    """Rows written before the plan ids were renamed (premium/pro -> p5/p10), plus paid
+    passes bought before the subscription existed. Idempotent, runs once at boot."""
+    with _connect() as c:
+        c.execute("update users set plan = 'p5' where plan = 'premium'")
+        c.execute("update users set plan = 'p10' where plan = 'pro'")
+        c.execute("update users set plan = 'p5' where plan = 'free' and email in"
+                  " (select user_email from passes where status = 'paid' and halls >= 5 and halls < 10)")
+        c.execute("update users set plan = 'p10' where plan = 'free' and email in"
+                  " (select user_email from passes where status = 'paid' and halls >= 10)")
 
 
 def count():

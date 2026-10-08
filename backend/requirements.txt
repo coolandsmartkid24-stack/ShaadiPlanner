@@ -4,3 +4,5 @@ python-multipart          # starlette needs it to parse PayPak's form-encoded IP
 openai>=1.60
 python-dotenv
 reportlab
+psycopg[binary]>=3.2      # Supabase (PostgreSQL) driver - backend/db.py
+psycopg-pool>=3.2         # connection pool against the Supabase pooler

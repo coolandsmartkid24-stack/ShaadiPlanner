@@ -3,14 +3,15 @@
 PLANS below is the only place a plan is defined: how many search results it shows, how many
 halls may be contacted every 24 hours and what it costs.  The API re-derives usage from
 contact_log on every request, so nothing the browser sends can grant an extra hall.
-Storage reuses backend/users.sqlite (see users.py): accounts, quotations, contacts and payments
-live in one file.  Tables are created/added on first import - existing rows are never touched.
+Storage is Supabase (see backend/db.py): accounts, quotations, contacts and payments live in
+one Postgres database.  Tables are created on first import - existing rows are never touched.
 """
 import json, secrets, time
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
 
+import db
 import users as userdb
 
 # ---- the plans: ONE dict.  searches = results per category, halls = sends allowed in the
@@ -31,89 +32,13 @@ SLOTS = ("Morning", "Evening")
 FIELDS = ("title", "host", "event_type", "event_date", "slot", "time", "guests",
           "budget", "menu", "services", "notes", "halls")
 
-TABLES = """
-create table if not exists quotations (
-  id            text    primary key,
-  user_email    text    not null,
-  title         text    not null default '',
-  host          text    not null default '',
-  event_type    text    not null default 'Barat',
-  event_date    text    not null default '',
-  slot          text    not null default 'Evening',
-  time          text    not null default '7:00 PM',
-  guests        integer not null default 300,
-  budget        integer not null default 1500000,
-  menu_json     text    not null default '[]',
-  services_json text    not null default '[]',
-  notes         text    not null default '',
-  pass_id       text    not null default 'free',
-  status        text    not null default 'draft',
-  created       real    not null,
-  updated       real    not null,
-  deleted       integer not null default 0
-);
-create table if not exists quotation_halls (
-  quotation_id       text not null,
-  hall_id            text not null,
-  whatsapp_clicked_at real,
-  primary key (quotation_id, hall_id)
-);
-create table if not exists contact_log (
-  id            integer primary key autoincrement,
-  user_email    text not null,
-  quotation_id  text not null,
-  hall_id       text not null,
-  at            real not null
-);
-create index if not exists ix_contact_user on contact_log (user_email, at);
-create index if not exists ix_contact_quote on contact_log (quotation_id);
-create table if not exists passes (
-  id            integer primary key autoincrement,
-  user_email    text not null,
-  quotation_id  text not null,
-  halls         integer not null,
-  pkr           integer not null,
-  status        text not null default 'paid',
-  order_id      text not null,
-  created       real not null
-);
-create table if not exists payments (
-  identifier    text    primary key,   -- PayPak identifier (<= 20 chars), also the order id
-  user_email    text    not null,
-  quotation_id  text    not null,
-  pass_id       text    not null,
-  pkr           integer not null,
-  method        text    not null default '',
-  status        text    not null default 'pending',  -- pending | success | failed | cancelled | expired
-  tx_id         text    not null default '',
-  created       real    not null,
-  updated       real    not null
-);
-create index if not exists ix_payments_user on payments (user_email, created);
-"""
-
 HALLS_FILE = Path(__file__).parent / "halls.json"
 HALLS = json.loads(HALLS_FILE.read_text(encoding="utf-8")) if HALLS_FILE.exists() else []
 HALLS_BY_ID = {h["id"]: h for h in HALLS}
 
-_migrated = False
+# one shared transaction helper (db.py owns the pool, the schema and the commit/rollback)
+_connect = db._connect
 
-
-def _connect():
-    """The users table first (users.py owns its schema), then ours, once per process."""
-    global _migrated
-    c = userdb._connect()
-    if not _migrated:
-        cols = {r[1] for r in c.execute("pragma table_info(users)")}
-        if "phone" not in cols:
-            c.execute("alter table users add column phone text not null default ''")
-        c.executescript(TABLES)
-        c.commit()
-        _migrated = True
-    return c
-
-
-_connect().close()          # migrate at import: a signup straight after boot must find its columns
 
 
 # ---- venues ----
@@ -249,7 +174,7 @@ def hall_ids(qid):
 
 
 def _hall_ids(c, qid):
-    rows = c.execute("select hall_id from quotation_halls where quotation_id = ? order by rowid",
+    rows = c.execute("select hall_id from quotation_halls where quotation_id = ? order by seq",
                      (qid,)).fetchall()
     return [r[0] for r in rows]
 
@@ -262,7 +187,9 @@ def _set_halls(c, qid, halls):
         if hid not in keep:
             c.execute("delete from quotation_halls where quotation_id = ? and hall_id = ?", (qid, hid))
     for hid in halls:
-        c.execute("insert or ignore into quotation_halls (quotation_id, hall_id) values (?, ?)", (qid, hid))
+        c.execute("insert into quotation_halls (quotation_id, hall_id) values (?, ?)"
+                  " on conflict do nothing", (qid, hid))
+
 
 
 def create(email, data):

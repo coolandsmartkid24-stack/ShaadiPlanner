@@ -32,7 +32,11 @@ IN_AREA_KM = 2.5      # an address that never names the sector only counts as in
 NEAR_BAND = 3.0       # nearby rows are ranked in 3 km bands: nearest band first, best score inside a band
 
 app = FastAPI(title="Shaadi Planner API")
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://localhost:5174"], allow_methods=["*"], allow_headers=["*"])
+CORS_ORIGINS = [o.strip() for o in os.environ.get(
+    "CORS_ORIGINS",
+    "https://frontend-psi-blush-74.vercel.app,http://localhost:5173,http://localhost:5174",
+).split(",") if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 # ---- area helpers: the crawler stores the *searched* area when the address has no sector, so a PWD
 #      vendor crawled from "I-8" arrives labelled I-8.  Everything below re-reads the real address.
@@ -173,8 +177,8 @@ def canonical_area(city, area):
     return next((x for x in area_names(city) if areas.normalize(x) == n), None)
 
 
-# ---- auth: accounts live in SQLite (backend/users.sqlite) so they survive a restart.
-#      See backend/users.py - PBKDF2-hashed passwords, no local email verification.
+# ---- auth: accounts live in Supabase (the `users` table, backend/db.py) so they survive a
+#      restart.  See backend/users.py - PBKDF2-hashed passwords, no local email verification.
 class Login(BaseModel):
     email: str; password: str
 
@@ -372,14 +376,7 @@ def patch_me(b: Profile, user: dict = Depends(current_user)):
 # ---- data ----
 # legacy rows first: the old premium/pro plan ids became p5/p10, and a paid pass bought before
 # the subscription existed is honoured by activating the matching plan on that account.
-with userdb._connect() as c:
-    c.execute("update users set plan = 'p5' where plan = 'premium'")
-    c.execute("update users set plan = 'p10' where plan = 'pro'")
-    c.execute("update users set plan = 'p5' where plan = 'free' and email in"
-              " (select user_email from passes where status = 'paid' and halls >= 5 and halls < 10)")
-    c.execute("update users set plan = 'p10' where plan = 'free' and email in"
-              " (select user_email from passes where status = 'paid' and halls >= 10)")
-    c.commit()
+userdb.legacy_plan_migration()
 
 # demo logins are created on first boot so the demo accounts still work against the SQL store
 for _em, _pw, _pl in (("free@demo.pk", "free", "free"),

@@ -3,17 +3,18 @@
  1. Rules first (free):   your Excel + regex answer most requests, no API call at all.
  2. Intent call (tiny):   only if rules cannot find the area / section. No web search, ~150 output tokens.
  3. Enrich call (batched): ONE web-search call fills missing facts for the top vendors of a section
-                           (verified phone, capacity, price, hours, website, instagram). Cached in SQLite for 30 days.
+                            (verified phone, capacity, price, hours, website, instagram). Cached in Supabase for 30 days.
  4. Guards: daily call budget, per-plan access, strict JSON schema, every fact needs a source_url, phone must look Pakistani.
 """
-import hashlib, json, os, re, sqlite3, threading, time
-from pathlib import Path
+import hashlib, json, os, re, threading, time
+
+from db import _connect as _transaction          # Supabase, one transaction per block (backend/db.py)
 
 MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")          # cheap + supports the web_search tool
 MAX_CALLS_PER_DAY = int(os.environ.get("MAX_LLM_CALLS_PER_DAY", "200"))
 CACHE_DAYS = 30
 DISCOVER_N = 15                                                # fetched once per area/section, cached 30 days
-DB = Path(os.environ.get("ENRICH_DB", Path(__file__).parent / "enrich_cache.sqlite"))
+
 
 def _slug(s):
     return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
@@ -74,14 +75,11 @@ GEOCODE_SCHEMA = {"type": "object", "additionalProperties": False,
                                  "label": {"type": ["string", "null"]}}, "required": ["lat", "lon", "label"]}
 BOX = (33.40, 33.90, 72.80, 73.40)                      # the crawler's window over Islamabad + Rawalpindi
 
-# ---------------------------------------------------------------- storage: cache + budget
+# ---------------------------------------------------------------- storage: cache + budget (Supabase, see backend/db.py)
 def db():
-    c = sqlite3.connect(DB)
-    c.execute("create table if not exists enrich(id text primary key, data text, ts real)")
-    c.execute("create table if not exists usage(day text primary key, calls integer)")
-    c.execute("create table if not exists verified(city text, area text, section text, data text, ts real, "
-              "primary key (city, area, section))")
-    return c
+    """One Supabase transaction - the three cache tables (enrich / llm_usage / verified) live
+    there and are created by db.ensure_schema()."""
+    return _transaction()
 
 def cached(ids):
     out, cutoff = {}, time.time() - CACHE_DAYS * 86400
@@ -92,14 +90,19 @@ def cached(ids):
     return out
 
 def store(i, data):
-    with db() as c: c.execute("insert or replace into enrich values (?,?,?)", (i, json.dumps(data), time.time()))
+    with db() as c:
+        c.execute("insert into enrich (id, data, ts) values (?, ?, ?)"
+                  " on conflict (id) do update set data = excluded.data, ts = excluded.ts",
+                  (i, json.dumps(data), time.time()))
 
 def spend_call():
     day = time.strftime("%Y-%m-%d")
     with db() as c:
-        n = (c.execute("select calls from usage where day=?", (day,)).fetchone() or [0])[0]
+        n = (c.execute("select calls from llm_usage where day=?", (day,)).fetchone() or [0])[0]
         if n >= MAX_CALLS_PER_DAY: return False
-        c.execute("insert or replace into usage values (?,?)", (day, n + 1)); return True
+        c.execute("insert into llm_usage (day, calls) values (?, ?)"
+                  " on conflict (day) do update set calls = excluded.calls", (day, n + 1))
+        return True
 
 # ---------------------------------------------------------------- rules parser (free)
 WORDS = {"venue": ["marquee", "hall", "venue", "banquet", "lawn", "barat", "walima"], "planner": ["planner", "event", "decor"],
@@ -309,7 +312,8 @@ def verified_get(city, area, section):
 
 def verified_put(city, area, section, data):
     with db() as c:
-        c.execute("insert or replace into verified values (?,?,?,?,?)",
+        c.execute("insert into verified (city, area, section, data, ts) values (?, ?, ?, ?, ?)"
+                  " on conflict (city, area, section) do update set data = excluded.data, ts = excluded.ts",
                   (city, area, section, json.dumps(data, ensure_ascii=False), time.time()))
 
 def _empty(status):
