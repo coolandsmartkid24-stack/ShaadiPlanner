@@ -56,11 +56,10 @@ export default function Auth({ onDone }) {
     <div className="auth">
       <div className="auth-l">
         <Logo />
-        <span className="eyebrow">Your Wedding, Your Way</span>
-        <h1>Get a hall quotation in 5 minutes.</h1>
+        <h1>Your Wedding, Your Way</h1>
         <p>
-          Tell us your event, pick a hall, add your menu, and we send a clean PDF quotation
-          request to the hall on WhatsApp.
+          Build your event, pick your hall, choose your menu, and send your plan directly to the
+          hall on WhatsApp.
         </p>
         <ul className="pts">
           <li>Free to start</li>
