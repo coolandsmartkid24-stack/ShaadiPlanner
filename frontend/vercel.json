@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://backend-eight-gamma-64.vercel.app/api/:path*" },
+    { "source": "/q/:path*", "destination": "https://backend-eight-gamma-64.vercel.app/q/:path*" },
+    { "source": "/((?!api/|q/).*)", "destination": "/index.html" }
+  ]
+}
