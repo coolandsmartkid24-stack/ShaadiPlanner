@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("classify", ROOT / "classify.py")
 cl = importlib.util.module_from_spec(spec); spec.loader.exec_module(cl)
 
-PLACES = ROOT / "places.json"
+PLACES = ROOT / "backend" / "places.json"
 
 
 def main():

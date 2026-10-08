@@ -1,8 +1,10 @@
 fastapi
-uvicorn[standard]
-python-multipart          # starlette needs it to parse PayPak's form-encoded IPN
-openai>=1.60
+uvicorn
+watchfiles
+python-multipart
+pydantic
+openai
 python-dotenv
 reportlab
-psycopg[binary]>=3.2      # Supabase (PostgreSQL) driver - backend/db.py
-psycopg-pool>=3.2         # connection pool against the Supabase pooler
+psycopg[binary]>=3.2
+psycopg-pool>=3.2

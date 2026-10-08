@@ -1,6 +1,11 @@
-"""Clean, de-duplicate and rank crawler output. Produces places.json (for the API) and places_sorted.xlsx.
-Usage: python sort_places.py existing.tsv   (or the crawler's *_progress.json)   [--out places.json]"""
+"""Clean, de-duplicate and rank crawler output. Produces backend/places.json (what the API reads,
+next to backend/main.py) and places_sorted.xlsx.
+Usage: python sort_places.py existing.tsv   (or the crawler's *_progress.json)
+       [--out places.json]   (defaults to backend/places.json)"""
 import csv, json, re, sys, math
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
 
 SECTIONS = {"venue": "Marquee / Venue", "planner": "Event planner", "makeup": "Parlour / Makeup",
             "dj": "DJ / Sound", "photo": "Photographer", "sweets": "Sweets"}
@@ -61,7 +66,9 @@ def load(path):
             for r in csv.DictReader(open(path, encoding="utf-8-sig"), delimiter="\t")]
 
 def main():
-    src = sys.argv[1]; out = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else "places.json"
+    src = sys.argv[1]
+    given = "--out" in sys.argv
+    out = sys.argv[sys.argv.index("--out") + 1] if given else str(ROOT / "backend" / "places.json")
     seen, rows, dropped = {}, [], {"outside": 0, "no_phone": 0, "dup": 0, "no_name": 0}
     for r in load(src):
         if not r["name"].strip(): dropped["no_name"] += 1; continue
@@ -91,7 +98,7 @@ def main():
     for r in sorted(rows, key=lambda x: (x["city"], x["area"], x["sections"][0], -x["score"])):
         ws.append([r["city"], r["area"], SECTIONS[r["sections"][0]], r["name"], r["rating"], r["reviews"], r["score"], r["phone"], r["address"], r["website"], r["maps_url"]])
     ws.freeze_panes = "A2"; ws.auto_filter.ref = ws.dimensions
-    wb.save(out.replace(".json", "_sorted.xlsx"))
+    wb.save(out.replace(".json", "_sorted.xlsx") if given else str(ROOT / "places_sorted.xlsx"))
     print(f"kept {len(rows)}; dropped {dropped}")
     for c in SECTIONS: print(c, sum(c in r['sections'] for r in rows))
 main()

@@ -1,7 +1,10 @@
-"""Shaadi Planner API  -  run:  uvicorn main:app --reload      (reads ../places.json made by sort_places.py)
-Data files: <project>/places.json (crawler + sorter) and <project>/discovered_places.json (vendors the
-online check found).  Both are re-read automatically whenever either file's modified time changes."""
-import base64, hashlib, hmac, json, math, os, re, time
+"""Shaadi Planner API  -  run:  uvicorn main:app --reload      (reads places.json made by sort_places.py)
+Data files: <backend>/places.json (crawler + sorter, read relative to this file) and discovered
+vendors found at runtime, which are written to the system temp directory because the filesystem
+next to the code is read-only on Vercel.  Both are re-read automatically whenever their
+modified time changes."""
+import base64, hashlib, hmac, json, math, os, re, tempfile, threading, time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qsl
@@ -9,9 +12,10 @@ from dotenv import load_dotenv
 load_dotenv()                           # .env first: areas/llm read the environment at import time
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 import areas
+import db
 import llm
 import paypak
 import pdfquote
@@ -19,9 +23,11 @@ import quotations as qdb
 import users as userdb
 
 SECRET = os.environ.get("SHAADI_SECRET", "change-me").encode()
-ROOT = Path(__file__).resolve().parent.parent
-DATA = Path(os.environ.get("PLACES_JSON") or ROOT / "places.json").resolve()
-DISCOVERED = Path(os.environ.get("DISCOVERED_PLACES_JSON") or DATA.parent / "discovered_places.json").resolve()
+HERE = Path(__file__).resolve().parent
+DATA = Path(os.environ.get("PLACES_JSON") or HERE / "places.json").resolve()
+DISCOVERED = Path(os.environ.get("DISCOVERED_PLACES_JSON") or HERE / "discovered_places.json").resolve()
+# web-found vendors are appended here at runtime: /tmp is the only writable place on Vercel
+DISCOVERED_TMP = Path(tempfile.gettempdir()) / "discovered_places.json"
 SECTIONS = {"venue": "Marquee / Venue", "planner": "Event planner", "makeup": "Parlour / Makeup",
             "dj": "DJ / Sound", "photo": "Photographer", "sweets": "Sweets"}
 # Plans (search depth, 24-hour hall-send allowance, price) live in quotations.PLANS - one config.
@@ -31,12 +37,38 @@ NEAR_KM = 12.0        # nothing further than this from the centre of the searche
 IN_AREA_KM = 2.5      # an address that never names the sector only counts as in-area inside this radius
 NEAR_BAND = 3.0       # nearby rows are ranked in 3 km bands: nearest band first, best score inside a band
 
-app = FastAPI(title="Shaadi Planner API")
+@asynccontextmanager
+async def lifespan(_app):
+    """Anything that wants the database at boot (legacy plan migration, demo accounts) runs
+    here, once per process and never at import time: on Vercel a database hiccup during the
+    import would turn every route - /health included - into FUNCTION_INVOCATION_FAILED."""
+    try:
+        bootstrap()
+    except Exception as x:
+        print("bootstrap failed (the API still starts):", str(x)[:300])
+    yield
+
+
+app = FastAPI(title="Shaadi Planner API", lifespan=lifespan)
 CORS_ORIGINS = [o.strip() for o in os.environ.get(
     "CORS_ORIGINS",
     "https://frontend-psi-blush-74.vercel.app,http://localhost:5173,http://localhost:5174",
 ).split(",") if o.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
+
+
+@app.get("/health")
+def health():
+    """Liveness probe: always 200. `db` tells whether the database answered `select 1`, so
+    a broken DATABASE_URL degrades the check instead of failing the invocation."""
+    return {"ok": True, "db": db.ping()}
+
+
+@app.exception_handler(db.DBError)
+async def _db_error_handler(_request, exc):
+    """A missing DATABASE_URL or a wrong password becomes a 503 with the real reason,
+    never an unhandled 500."""
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 # ---- area helpers: the crawler stores the *searched* area when the address has no sector, so a PWD
 #      vendor crawled from "I-8" arrives labelled I-8.  Everything below re-reads the real address.
@@ -116,19 +148,30 @@ def _read(path):
         return []
     return [r for r in recs if isinstance(r, dict)] if isinstance(recs, list) else []
 
+def _data_files():
+    """places.json first, then every discovered-vendors file (the shipped one, then the one
+    appended at runtime in the temp directory)."""
+    return (DATA, DISCOVERED, DISCOVERED_TMP)
+
+
 def _load():
-    """places.json + discovered_places.json. Only Islamabad and Rawalpindi rows survive."""
-    out = []
-    for path in (DATA, DISCOVERED):
+    """places.json + discovered_places.json. Only Islamabad and Rawalpindi rows survive;
+    a vendor present in more than one file is loaded once."""
+    out, seen = [], set()
+    for path in _data_files():
         for r in _read(path):
             if r.get("city") not in areas.CITIES: continue
+            rid = r.get("id")
+            if rid is not None:
+                if rid in seen: continue
+                seen.add(rid)
             r["area"] = areas.normalize(r.get("area")) or "Other areas"
             out.append(r)
     return out
 
 def _mtimes():
     m = []
-    for p in (DATA, DISCOVERED):
+    for p in _data_files():
         try: m.append(p.stat().st_mtime)
         except OSError: m.append(0.0)
     return tuple(m)
@@ -270,6 +313,7 @@ def current_plan(authorization: Optional[str] = Header(None)) -> str:
 @app.post("/api/login")
 def login(b: Login, request: Request):
     _rate("login", _client(request))
+    bootstrap()                        # demo accounts, in case the startup attempt found the DB down
     u = userdb.authenticate(b.email, b.password)
     if not u: raise HTTPException(401, "Wrong email or password")
     return _issue(u)
@@ -279,6 +323,7 @@ def signup(b: Signup, request: Request):
     """Password 8+ and a real Pakistani WhatsApp number are checked here - the browser's own
     checks are only there to save a round trip."""
     _rate("signup", _client(request))
+    bootstrap()
     e = b.email.lower().strip()
     if "@" not in e or "." not in e.split("@")[-1]:
         raise HTTPException(400, "Enter a valid email address")
@@ -298,6 +343,7 @@ def forgot(b: Reset, request: Request):
     """Password reset. Locally there is no mail server and no verification step: the new
     password is applied straight away so the flow stays one screen."""
     _rate("login", _client(request))
+    bootstrap()
     if len(b.password) < 8:
         raise HTTPException(400, "Use a password of 8 or more characters")
     if userdb.reset_password(b.email, b.password) is None:
@@ -354,6 +400,7 @@ def _me(user: dict) -> dict:
 
 @app.get("/api/me")
 def me(user: dict = Depends(current_user)):
+    bootstrap()
     return _me(user)
 
 @app.patch("/api/me")
@@ -373,24 +420,37 @@ def patch_me(b: Profile, user: dict = Depends(current_user)):
     userdb.set_profile(user["email"], fields)
     return _me(userdb.find(user["email"]) or user)
 
-# ---- data ----
-# legacy rows first: the old premium/pro plan ids became p5/p10, and a paid pass bought before
-# the subscription existed is honoured by activating the matching plan on that account.
-userdb.legacy_plan_migration()
+# ---- boot: legacy rows first (the old premium/pro plan ids became p5/p10, and a paid pass
+#      bought before the subscription existed is honoured by activating the matching plan on
+#      that account), then the demo logins, so the demo accounts work against the SQL store.
+#      Run once per process from the lifespan hook above - never at import time, so the module
+#      always loads even when the database is down or DATABASE_URL is missing.
 
-# demo logins are created on first boot so the demo accounts still work against the SQL store
-for _em, _pw, _pl in (("free@demo.pk", "free", "free"),
-                      ("premium@demo.pk", "premium", "p5"),
-                      ("pro@demo.pk", "pro", "p10")):
-    _u = userdb.find(_em)
-    if _u is None:
-        userdb.create(_em, _pw, _pl.title(), "03001234567")
-        userdb.set_plan(_em, _pl)
-    else:
-        if _u["plan"] != _pl:
-            userdb.set_plan(_em, _pl)
-        if not _u.get("phone"):
-            userdb.set_profile(_em, {"phone": "03001234567"})   # quotations print the reply number
+_bootstrapped = False
+_bootstrap_lock = threading.Lock()
+
+
+def bootstrap():
+    global _bootstrapped
+    if _bootstrapped:
+        return
+    with _bootstrap_lock:
+        if _bootstrapped:
+            return
+        userdb.legacy_plan_migration()
+        for _em, _pw, _pl in (("free@demo.pk", "free", "free"),
+                              ("premium@demo.pk", "premium", "p5"),
+                              ("pro@demo.pk", "pro", "p10")):
+            _u = userdb.find(_em)
+            if _u is None:
+                userdb.create(_em, _pw, _pl.title(), "03001234567")
+                userdb.set_plan(_em, _pl)
+            else:
+                if _u["plan"] != _pl:
+                    userdb.set_plan(_em, _pl)
+                if not _u.get("phone"):
+                    userdb.set_profile(_em, {"phone": "03001234567"})   # quotations print the reply number
+        _bootstrapped = True
 
 @app.get("/api/meta")
 def meta():
@@ -496,16 +556,21 @@ def check_list(city, area, section):
             for r in pool(city, area, section)[:10]]
 
 def append_discovered(records):
-    """Save web-found vendors beside places.json. Temp file + os.replace, so a concurrent reader
-    either sees the old file or the new one, never a half-written one."""
+    """Save web-found vendors to the system temp directory (the code directory is read-only
+    on Vercel - nothing is ever written next to it).  Temp file + os.replace, so a concurrent
+    reader either sees the old file or the new one, never a half-written one."""
     if not records: return
-    old = _read(DISCOVERED)
-    seen = {r.get("id") for r in old}
+    old, seen = [], set()
+    for path in (DISCOVERED, DISCOVERED_TMP):
+        for r in _read(path):
+            if r.get("id") in seen: continue
+            seen.add(r.get("id")); old.append(r)
     keep = [r for r in records if r.get("id") not in seen]
     if not keep: return
-    tmp = DISCOVERED.with_name(DISCOVERED.name + ".tmp")
+    DISCOVERED_TMP.parent.mkdir(parents=True, exist_ok=True)
+    tmp = DISCOVERED_TMP.with_name(DISCOVERED_TMP.name + ".tmp")
     tmp.write_text(json.dumps(old + keep, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, DISCOVERED)
+    os.replace(tmp, DISCOVERED_TMP)
     _cache["mtime"] = None
 
 def _stats(ranked):

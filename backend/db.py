@@ -1,24 +1,36 @@
 """Supabase (PostgreSQL) store - the connection helper and the whole schema.
 
-Everything the API used to keep in backend/users.sqlite now lives in Supabase:
-  SUPABASE_DB_URL        the connection string, server only, never sent to a browser
+Everything the API used to keep in a local SQLite file now lives in Supabase:
+  DATABASE_URL             the pooler connection string (Supabase Dashboard -> Connect ->
+                           Pooler -> Transaction mode, port 6543), server only, never sent
+                           to a browser.  SUPABASE_DB_URL is accepted as an alias.
   SUPABASE_PUBLISHABLE_KEY  browser-safe key; only usable because every table below has
-                             Row Level Security enabled (see schema.sql)
+                              Row Level Security enabled (see schema.sql)
 
 Tables are created on first use (CREATE TABLE IF NOT EXISTS + indexes), so a brand new
 Supabase project needs nothing but this file.  backend/schema.sql carries the same DDL
 for the SQL editor.
 
+Nothing here opens a connection at import time: db.py is imported by every module, so a
+missing DATABASE_URL or a wrong password must never stop main.py from loading (on Vercel
+that would turn into FUNCTION_INVOCATION_FAILED for every route).  The URL is validated
+on the first query instead, raising DBError with the real reason, and /health answers
+db: false while the database is unreachable.
+
 The query code keeps SQLite's shape on purpose: `with db._connect() as c:` opens one
 transaction, `?` placeholders are translated to Postgres `%s`, and rows answer both
-`r["id"]` and `r[0]`.  Every statement is one command (the Supabase pooler runs in
-transaction mode, where prepared statements and multi-command strings are refused).
+`r["id"]` and `r[0]`.  Every statement is one command, prepared statements are disabled
+(prepare_threshold=None) because Supabase's transaction pooler (port 6543) does not keep
+them, and connections are kept short-lived (DB_POOL_MAX_LIFETIME seconds) so a serverless
+instance never holds a stale session.
 """
 import atexit
 import os
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
@@ -28,11 +40,13 @@ load_dotenv(Path(__file__).with_name(".env"))   # backend/.env, even when starte
 import psycopg
 from psycopg_pool import ConnectionPool
 
-DB_URL = (os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL") or "").strip()
-if not DB_URL:
-    raise RuntimeError(
-        "SUPABASE_DB_URL is not set. Copy backend/.env.example to backend/.env and put your "
-        "Supabase connection string in it (Supabase Dashboard -> Connect -> Session pooler).")
+
+class DBError(RuntimeError):
+    """Database misconfiguration or the database is unreachable. main.py answers 503 with
+    this message; /health answers db:false. Never raised while importing this module."""
+
+
+DB_URL = (os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL") or "").strip()
 
 # ---- schema: accounts, quotations, contacts, payments, and the LLM cache -----------------
 TABLES = [
@@ -159,6 +173,38 @@ def _q(statement: str) -> str:
     return statement.replace("?", "%s")
 
 
+def _connection_string() -> str:
+    """DATABASE_URL, hardened for Supabase's pooler: sslmode=require when the URL does not
+    say otherwise.  Raises DBError (only ever at call time, never at import) when the
+    variable is missing."""
+    if not DB_URL:
+        raise DBError(
+            "DATABASE_URL is not set. Add it in Vercel -> Settings -> Environment Variables "
+            "(Supabase Dashboard -> Connect -> Pooler -> Transaction mode, port 6543). "
+            "Locally, put it in backend/.env as DATABASE_URL or SUPABASE_DB_URL.")
+    url = DB_URL.strip()
+    if "://" in url:                       # postgresql://user:pass@host:6543/postgres?...
+        parts = urlsplit(url)
+        query = dict(parse_qsl(parts.query))
+        query.setdefault("sslmode", "require")
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+    if "sslmode" not in url:               # keyword/value form: host=... port=6543 ...
+        url += " sslmode=require"
+    return url
+
+
+def _probe(conninfo: str) -> None:
+    """One short-lived connection with a clear reason on failure (wrong password, DNS,
+    firewall, a pooler URL without the project ref in the username ...)."""
+    try:
+        with psycopg.connect(conninfo, connect_timeout=10, prepare_threshold=None) as c:
+            with c.cursor() as cur:
+                cur.execute("select 1")
+                cur.fetchone()
+    except Exception as x:
+        raise DBError(f"Cannot connect to the database ({type(x).__name__}): {x}") from x
+
+
 class Connection:
     """What every `with _connect() as c:` hands out: SQLite's execute(), Postgres underneath."""
 
@@ -183,6 +229,7 @@ _pool = None
 _pool_lock = threading.Lock()
 _schema_lock = threading.Lock()
 _schema_done = False
+_last_error = [None, 0.0]          # [message, when] - a dead database is re-probed at most every 5 s
 
 
 def _get_pool():
@@ -190,16 +237,26 @@ def _get_pool():
     if _pool is None:
         with _pool_lock:
             if _pool is None:
+                if _last_error[0] and time.time() - _last_error[1] < 5:
+                    raise DBError(_last_error[0])
+                conninfo = _connection_string()
+                try:
+                    _probe(conninfo)
+                except DBError as x:
+                    _last_error[0], _last_error[1] = str(x), time.time()
+                    raise
+                _last_error[0] = None
                 _pool = ConnectionPool(
-                    conninfo=DB_URL,
-                    min_size=int(os.environ.get("DB_POOL_MIN", "1")),
-                    max_size=int(os.environ.get("DB_POOL_MAX", "5")),
-                    max_lifetime=1800,
-                    max_idle=600,
-                    num_workers=1,                       # one thread is enough for a dev process
+                    conninfo=conninfo,
+                    min_size=int(os.environ.get("DB_POOL_MIN", "0")),
+                    max_size=int(os.environ.get("DB_POOL_MAX", "3")),
+                    max_lifetime=float(os.environ.get("DB_POOL_MAX_LIFETIME", "300")),
+                    max_idle=60,
+                    timeout=10,                       # how long a request waits for a connection
+                    num_workers=1,                    # one thread is enough for a serverless process
                     kwargs={"row_factory": _row_factory,
-                            "prepare_threshold": 0,      # the pooler serves transaction mode
-                            "connect_timeout": 15},
+                            "prepare_threshold": None,   # the transaction pooler drops prepared statements
+                            "connect_timeout": 10},
                     open=True,
                 )
     return _pool
@@ -219,6 +276,19 @@ def _close_pool():
 
 
 atexit.register(_close_pool)
+
+
+def ping() -> bool:
+    """True when the database answers `select 1` right now. One short-lived connection,
+    never raises - this is what /health reports as `db`."""
+    try:
+        with psycopg.connect(_connection_string(), connect_timeout=5, prepare_threshold=None) as c:
+            with c.cursor() as cur:
+                cur.execute("select 1")
+                cur.fetchone()
+        return True
+    except Exception:
+        return False
 
 
 def ensure_schema(force: bool = False):

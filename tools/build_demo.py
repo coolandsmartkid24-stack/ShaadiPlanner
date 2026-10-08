@@ -7,7 +7,7 @@ app = 'const {useEffect,useMemo,useState}=React;\n' + app + '\nReactDOM.createRo
 (root / "tools/_app.jsx").write_text(app)
 js = subprocess.run(["node_modules/.bin/esbuild", "tools/_app.jsx".replace("tools/", ""), "--minify", "--loader:.jsx=jsx"], cwd=root / "tools", capture_output=True, text=True, check=True).stdout
 keep = ("id","name","sections","city","area","rating","reviews","score","phone","address","hours","website","category","lat","lon","maps_url","review_text")
-rows = json.loads((root / "places.json").read_text())
+rows = json.loads((root / "backend" / "places.json").read_text())
 rows = [{k: r[k] for k in keep} for r in rows]
 for r in rows:
     r["address"] = r["address"][:120]; r["hours"] = r["hours"][:140]; r["review_text"] = r["review_text"][:200]
