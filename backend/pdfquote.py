@@ -115,16 +115,6 @@ def _menu(items, width):
     return [t]
 
 
-def _foot(phone):
-    t = Table([[Paragraph(f"<b>Please reply on WhatsApp {escape(phone or '')}. Thank you.</b>", CELL)]],
-              colWidths=[507])
-    t.setStyle(TableStyle([("LINEABOVE", (0, 0), (-1, -1), 1, HAIR),
-                           ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                           ("TOPPADDING", (0, 0), (-1, -1), 12),
-                           ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
-    return t
-
-
 def quotation_pdf(q, hall, user):
     """-> PDF bytes for one quotation.  `hall` is the venue it is prepared for (may be None yet)."""
     width = A4[0] - 88
@@ -154,7 +144,7 @@ def quotation_pdf(q, hall, user):
     ]
     if q["notes"]:
         story += [Paragraph("Notes", LABEL), Paragraph(escape(q["notes"]), VALUE)]
-    story += [Spacer(1, 16), _foot(phone)]
+    story += [Spacer(1, 16)]
 
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=44, rightMargin=44, topMargin=40, bottomMargin=44,

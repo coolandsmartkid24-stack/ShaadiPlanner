@@ -194,7 +194,6 @@ input[type=date]{min-height:49px}
 .doc-chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 2px}
 .doc-chip{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border:1px solid #e2e2e2;border-radius:999px;background:#fafafa;font-size:12px;font-weight:600}
 .doc-chip svg{color:#047857;flex:none}
-.doc-f{display:flex;align-items:center;gap:7px;margin:18px 0 0;font-weight:700;border-top:1px solid #ddd;padding-top:12px}
 
 .sendrow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line);flex-wrap:wrap}
 .sendrow>span:first-child{display:flex;flex-direction:column;min-width:0;flex:1 1 160px}
