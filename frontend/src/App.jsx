@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ToastContainer, toast as notify } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { api, getSession, setSession, clearSession, onUnauthorized, settlePayment } from "./api.js";
-import { newQuotation, planName } from "./lib.js";
+import { newQuotation, passOf, planName } from "./lib.js";
 import Auth from "./Auth.jsx";
 import Home from "./Home.jsx";
 import Wizard from "./Wizard.jsx";
@@ -225,14 +225,29 @@ export default function App() {
     if (user && !booting) refresh();
   }, [user, booting, refresh]);
 
-  const handleCreated = async () => {
-    try {
-      const q = await api.create(newQuotation(user));
-      setQuotes((list) => [q, ...(list || [])]);
-      openQuotation(q);
-    } catch (e) {
-      toast(e.message, "error");
-    }
+  // "+ New quotation" opens the wizard on the click: the POST that creates the row runs behind
+  // it. Until it lands the wizard holds its edits (no id to PATCH yet) and adopts the real id
+  // when it arrives, so the first screen costs no round trip.
+  const handleCreated = () => {
+    const draft = newQuotation(user);
+    // allow is server-owned and not part of the POST body - only the wizard's first screen
+    // reads it, so the plan's allowance is shown right away instead of a frame of "1 hall".
+    setOpen({ ...draft, id: "", allow: passOf(user?.plan).halls });
+    stashOpen("");
+    api
+      .create(draft)
+      .then((q) => {
+        setQuotes((list) => [q, ...(list || [])]);
+        setOpen((cur) => (cur && cur.id === "" ? q : cur));
+        stashOpen(q.id);
+      })
+      .catch((e) => {
+        // Nothing exists server-side, so the wizard cannot save: close it rather than leave a
+        // quotation that would silently discard every edit.
+        setOpen((cur) => (cur && cur.id === "" ? null : cur));
+        stashOpen("");
+        toast(e.message, "error");
+      });
   };
 
   const deleteQuotation = async (q) => {

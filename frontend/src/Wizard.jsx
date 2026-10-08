@@ -44,7 +44,6 @@ function Field({ label, hint, children }) {
 /* ---------- step 1: the event ---------- */
 function StepEvent({ q, set }) {
   const wk = ["Friday", "Saturday", "Sunday"].includes(dayName(q.event_date));
-  const perGuest = q.guests > 0 ? Math.round(q.budget / q.guests) : 0;
   const [custom, setCustom] = useState(() => !PRESET_TIMES.includes(q.time));
   const pickSlot = (s) => {
     setCustom(false);
@@ -147,7 +146,7 @@ function StepEvent({ q, set }) {
             </button>
           </div>
         </div>
-        <Field label="Your total budget (Rs)" hint={perGuest > 0 ? `About ${money(perGuest)} per guest` : " "}>
+        <Field label="Your total budget (Rs)">
           <input type="number" inputMode="numeric" min="0" max="1000000000" step="10000" value={q.budget} onChange={(e) => set({ budget: e.target.value === "" ? "" : +e.target.value })} onBlur={(e) => set({ budget: clamp(+e.target.value, 0, 1_000_000_000, 0) })} />
         </Field>
       </div>
@@ -362,7 +361,6 @@ function Doc({ q, user }) {
         {row("Time", `${q.slot} · ${q.time}`)}
         {row("Number of persons", Number(q.guests || 0).toLocaleString("en-IN"))}
         {row("My budget", money(q.budget))}
-        {row("Budget per person", money(Math.round((q.budget || 0) / Math.max(1, q.guests || 1))))}
       </div>
       <p className="doc-k">Services wanted</p>
       <p className="doc-v">{q.services.join(", ") || "None selected"}</p>
@@ -453,6 +451,12 @@ export default function Wizard({ initial, user, onExit, onUpgraded, toast }) {
     clearTimeout(timer.current);
     const body = pending.current;
     if (!body) return chain.current;
+    if (!qRef.current.id) {
+      // Opened before the server had the row (App opens the wizard on the click): the edit is
+      // kept and retried - the id effect below clears this as soon as the POST comes back.
+      timer.current = setTimeout(flush, 400);
+      return chain.current;
+    }
     pending.current = null;
     setSaveState("saving");
     const p = chain.current.then(async () => {
@@ -484,7 +488,7 @@ export default function Wizard({ initial, user, onExit, onUpgraded, toast }) {
      the browser finishes that request even though the page is already going away. */
   const flushNow = () => {
     const body = pending.current;
-    if (!body) return;
+    if (!body || !qRef.current.id) return;
     pending.current = null;
     clearTimeout(timer.current);
     api.update(qRef.current.id, body, true).catch(() => {});
@@ -499,6 +503,26 @@ export default function Wizard({ initial, user, onExit, onUpgraded, toast }) {
       window.removeEventListener("beforeunload", bye);
     };
   }, []);
+
+  // The quotation was opened before its row existed: take the real id (and the server-owned
+  // allowance fields) as soon as App has them, keeping everything typed in the meantime - which
+  // also unblocks the pending flush above.
+  useEffect(() => {
+    if (!initial.id || qRef.current.id) return;
+    const next = {
+      ...qRef.current,
+      id: initial.id,
+      allow: initial.allow,
+      left: initial.left,
+      sent: initial.sent,
+      next_free_at: initial.next_free_at,
+      pass_id: initial.pass_id,
+      status: initial.status,
+    };
+    qRef.current = next;
+    setQ(next);
+    if (pending.current) flush();
+  }, [initial.id]);
 
   // Server-owned fields only (allowance, pass, status) - never clobbers a still-typing field.
   const applyAllowance = (r) => {

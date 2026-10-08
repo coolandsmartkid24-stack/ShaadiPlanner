@@ -79,14 +79,12 @@ def _header(q):
 
 
 def _details(q, width):
-    guests = q["guests"] or 1
     rows = [
         ("Event", q["event_type"] + (f" · {q['title']}" if q["title"] else "")),
         ("Date and day", qdb.nice_date(q["event_date"]) + (f" · {qdb.day_name(q['event_date'])}" if q["event_date"] else "")),
         ("Time", f"{q['slot']} · {q['time']}"),
         ("Number of persons", qdb.group(q["guests"])),
         ("My budget", qdb.money(q["budget"])),
-        ("Budget per person", qdb.money(round(q["budget"] / guests))),
     ]
     t = Table([[Paragraph(escape(a), CELL), Paragraph(escape(b), RIGHT)] for a, b in rows],
               colWidths=[width * 0.45, width * 0.55])
