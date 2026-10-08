@@ -78,12 +78,12 @@ export const api = {
   meta: () => req("/api/meta"),
 
   // ---- subscription: POST /api/checkout {plan, method}. The API answers either
-  //      {dev:true, token} (no gateway keys) or {url} - the browser is then sent to that
+  //      {dev:true, token} (PAYPAK_DEV_GRANT only) or {url} - the browser is then sent to that
   //      hosted checkout page and comes back on /?paid=<identifier>.
   checkout: (plan, method = "card") => req("/api/checkout", { method: "POST", body: { plan, method } }),
   payment: (identifier) => req(`/api/payments/${encodeURIComponent(identifier)}`),
-  confirmPayment: (identifier) =>
-    req(`/api/payments/${encodeURIComponent(identifier)}/confirm`, { method: "POST", body: {} }),
+  confirmPayment: (identifier, extra) =>
+    req(`/api/payments/${encodeURIComponent(identifier)}/confirm`, { method: "POST", body: extra || {} }),
 
   // ---- venues behind the Hall step ----
   halls: () => req("/api/halls"),
@@ -111,4 +111,40 @@ export async function downloadPdf(id, title) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// PayPak's IPN and the browser's return trip race each other, so this polls the payment record
+// until the gateway has settled it and, while it is still pending, asks the server to verify the
+// return trip too (sandbox answers at once, live waits for the IPN - both are handled the same).
+// `onTick` receives the pass number so the UI can keep saying the confirmation is running.
+// Resolves with the payment view, or gives up after ~60s and answers with whatever is known.
+export async function settlePayment(identifier, extra, onTick) {
+  const deadline = Date.now() + 60000;
+  const fatal = (e) =>
+    /not found|expired|did not match|not changed|Log in|cannot reach/i.test(String(e?.message || ""));
+  let last = null;
+  let n = 0;
+  while (Date.now() < deadline) {
+    try {
+      last = await api.payment(identifier);
+      if (last?.status && last.status !== "pending") return last;
+    } catch (e) {
+      if (fatal(e)) throw e;
+    }
+    n += 1;
+    onTick?.(n);
+    await sleep(2000);
+    if (n % 3 === 1) {
+      try {
+        const c = await api.confirmPayment(identifier, extra);
+        if (c?.status && c.status !== "pending") return c;
+        last = c || last;
+      } catch (e) {
+        if (fatal(e)) throw e;   // 403 in live mode simply means "still waiting for the IPN"
+      }
+    }
+  }
+  return last;
 }

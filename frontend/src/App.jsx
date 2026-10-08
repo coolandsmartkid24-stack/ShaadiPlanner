@@ -1,11 +1,29 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ToastContainer, toast as notify } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
-import { api, getSession, setSession, clearSession, onUnauthorized } from "./api.js";
+import { api, getSession, setSession, clearSession, onUnauthorized, settlePayment } from "./api.js";
 import { newQuotation, planName } from "./lib.js";
 import Auth from "./Auth.jsx";
 import Home from "./Home.jsx";
 import Wizard from "./Wizard.jsx";
+
+const PAY_KEY = "sp.pending-payment";   // survives the trip to the gateway and back
+
+const readPay = () => {
+  try {
+    return JSON.parse(sessionStorage.getItem(PAY_KEY) || "null");
+  } catch {
+    return null;
+  }
+};
+const stashPay = (p) => {
+  try {
+    if (p) sessionStorage.setItem(PAY_KEY, JSON.stringify(p));
+    else sessionStorage.removeItem(PAY_KEY);
+  } catch {
+    /* private mode: the confirmation simply has to happen on this page load */
+  }
+};
 
 function Splash() {
   return (
@@ -23,12 +41,40 @@ function Splash() {
   );
 }
 
+/* Shown while the return trip from PayPak is being verified. It never resolves on its own -
+   settlePayment() drives it, so the user always sees that something is happening instead of a
+   frozen page. */
+function PayOverlay({ pass }) {
+  const line =
+    pass <= 1
+      ? "Confirming your payment…"
+      : pass < 5
+      ? "Waiting for PayPak to confirm…"
+      : "Checking the gateway one more time…";
+  return (
+    <div className="scrim" role="status" aria-live="polite">
+      <div className="modal pay" role="dialog" aria-modal="true" aria-label="Confirming your payment">
+        <div className="done">
+          <span className="spin big" aria-hidden="true" />
+          <h2>{line}</h2>
+          <p className="muted">
+            Keep this tab open. Your plan switches on the moment the payment is verified - this
+            usually takes a few seconds.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState(getSession);
   const [booting, setBooting] = useState(() => !!getSession());
   const [quotes, setQuotes] = useState(null);
   const [quotesErr, setQuotesErr] = useState("");
   const [open, setOpen] = useState(null);       // quotation being edited in the wizard
+  const [paying, setPaying] = useState(null);   // {pass} while PayPak is being asked to confirm
+  const settling = useRef(false);
 
   const toast = useCallback((m, type) => {
     notify(String(m || ""), { type: type || "info" });
@@ -57,39 +103,77 @@ export default function App() {
     return () => onUnauthorized(null);
   }, []);
 
+  // The trip back from PayPak: the gateway's answer is verified here, in the open, with a
+  // progress overlay. The marker stays in sessionStorage when nothing conclusive came back, so
+  // a reload finishes the job instead of losing the payment.
+  const finishPayment = useCallback(async () => {
+    const p = readPay();
+    if (!p || settling.current) return;
+    settling.current = true;
+    setPaying({ pass: 1 });
+    try {
+      const done = await settlePayment(p.id, p.extra || {}, (n) => setPaying({ pass: n }));
+      if (done && done.status && done.status !== "pending") {
+        stashPay(null);
+        if (done.status === "success") {
+          const m = await api.me().catch(() => null);
+          if (m && m.email) {
+            setSession({ token: getSession()?.token, ...m });
+            setUser(getSession());
+          } else if (!getSession()) {
+            setUser(null);          // the token died while we were confirming: log in again
+          }
+          toast(`${planName(done.plan || done.pass)} plan is active.`, "success");
+        } else {
+          toast(`Payment ${done.status} - your plan was not changed.`, "error");
+        }
+      } else {
+        toast("PayPak has not confirmed the payment yet. Reload this page in a minute to check again.", "warning");
+      }
+    } catch (e) {
+      // Keep the marker when the account is the problem - logging back in runs this again.
+      // Anything else is final, so the same failure is not replayed on every page load.
+      if (!/log in/i.test(String(e?.message || ""))) stashPay(null);
+      toast(e.message, "error");
+    } finally {
+      settling.current = false;
+      setPaying(null);
+    }
+  }, [toast]);
+
   // First paint: the stored token decides the account, /api/me confirms it and refreshes it.
   // PayPak returns the browser to /?paid=<identifier> (or /?cancelled=1): those parameters are
-  // stripped from the URL first, then the payment is confirmed and the plan re-read from /api/me.
+  // stripped from the URL first, the payment is remembered, and finishPayment() confirms it.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const paidId = params.get("paid");
     const cancelled = params.has("cancelled");
+    const extra = {};
+    params.forEach((v, k) => {
+      if (k !== "paid" && k !== "cancelled") extra[k] = v;
+    });
     if (paidId || cancelled) {
       params.delete("paid");
       params.delete("cancelled");
       const qs = params.toString();
       window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash);
     }
-    if (!getSession()) return;
+    if (paidId) stashPay({ id: paidId, extra });
+    else if (cancelled) {
+      stashPay(null);
+      toast("Payment cancelled - your plan was not changed.", "warning");
+    }
+    if (!getSession()) {
+      if (paidId) toast("Payment made - log in and your plan will be activated.", "info");
+      setBooting(false);
+      return;
+    }
     (async () => {
       let m = null;
       try {
         m = await api.me();
       } catch {
         /* 401 already cleared the session; anything else keeps the cached one */
-      }
-      if (paidId) {
-        try {
-          const p = await api.confirmPayment(paidId);
-          if (p && p.status === "success") {
-            m = await api.me();
-            toast(`${planName(p.plan)} plan is active.`);
-          }
-        } catch (x) {
-          toast(x.message, "error");
-        }
-      } else if (cancelled) {
-        toast("Payment cancelled — your plan was not changed.", "warning");
       }
       if (m) {
         setSession({ token: getSession()?.token, ...m });
@@ -98,8 +182,9 @@ export default function App() {
         setUser(getSession());
       }
       setBooting(false);
+      if (readPay()) finishPayment();
     })();
-  }, [toast]);
+  }, [toast, finishPayment]);
 
   useEffect(() => {
     if (user && !booting) refresh();
@@ -154,18 +239,34 @@ export default function App() {
     setOpen(null);
   };
 
-  const handleUpgraded = (r) => {
+  const handleUpgraded = async (r) => {
     // DEV checkout carries a fresh token; the hosted PayPak checkout does not (the plan is
     // applied later, by the /?paid= confirm above) - never overwrite a good token with undefined.
     if (r?.token) setSession({ token: r.token });
     if (r?.plan) setSession({ plan: r.plan });
+    if (getSession()) {
+      try {
+        const m = await api.me();        // the server owns the plan, so read it back
+        if (m && m.email) setSession(m);
+      } catch {
+        /* keep the cached copy */
+      }
+    }
     setUser(getSession());
     toast(`You are on the ${r?.plan_name || planName(r?.plan)} plan now.`);
   };
 
   let view;
   if (booting) view = <Splash />;
-  else if (!user) view = <Auth onDone={() => setUser(getSession())} />;
+  else if (!user)
+    view = (
+      <Auth
+        onDone={() => {
+          setUser(getSession());
+          if (readPay()) finishPayment();   // paid, then had to log in again
+        }}
+      />
+    );
   else if (open) view = <Wizard initial={open} user={user} onExit={() => { setOpen(null); refresh(); }} onUpgraded={handleUpgraded} toast={toast} />;
   else
     view = (
@@ -186,6 +287,7 @@ export default function App() {
   return (
     <>
       {view}
+      {paying && <PayOverlay pass={paying.pass} />}
       <ToastContainer
         position="bottom-center"
         autoClose={4200}

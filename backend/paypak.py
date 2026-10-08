@@ -34,8 +34,20 @@ SITE_LOGO = os.environ.get("PAYPAK_LOGO") or f"{HOST}/assets/images/logoIcon/log
 
 
 def configured():
-    """True when the merchant keys are in .env - without them main.py falls back to DEV mode."""
+    """True when the merchant keys are in .env. Without them checkout is refused outright -
+    main.py never grants a plan for free, so "not configured" can never mean "free upgrade"."""
     return bool(PUBLIC_KEY and SECRET_KEY)
+
+
+def missing():
+    """The key names this process has no value for, so the API and the UI can say exactly
+    what to set instead of failing with a blank reason. Names only - never the values."""
+    out = []
+    if not PUBLIC_KEY:
+        out.append("PAYPAK_PUBLIC_KEY")
+    if not SECRET_KEY:
+        out.append("PAYPAK_SECRET_KEY")
+    return out
 
 
 def signature(amount, identifier) -> str:

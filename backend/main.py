@@ -350,13 +350,22 @@ def forgot(b: Reset, request: Request):
         raise HTTPException(404, "No account with that email — sign up instead")
     return {"ok": True}
 
+def _dev_checkout() -> bool:
+    """PAYPAK_DEV_GRANT=1 lets a machine with no gateway keys grant a plan (offline work on the
+    UI). Off by default and never meant for a deployment: without it a plan starts only when
+    PayPak has confirmed the money."""
+    return (os.environ.get("PAYPAK_DEV_GRANT") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 @app.post("/api/checkout")
 def checkout(request: Request, b: Checkout, user: dict = Depends(require_account)):
     """Opens the PayPak hosted checkout page for a plan. No money moves in this handler and no
     card data is ever accepted here - the browser goes to PayPak's own page (the returned url).
     The plan is stored later, by /api/payments/ipn or the return-trip confirm, once the HMAC
-    signature on the notification checks out. Without keys in .env the DEV grant still applies
-    (the app keeps working offline)."""
+    signature on the notification checks out.
+
+    When the gateway keys are missing this answers 503 instead of granting the plan: a plan is
+    never activated without a payment, so "keys not configured" can never be read as "free"."""
     _rate("checkout", user["email"])
     cfg = qdb.PLANS.get(b.plan)
     if cfg is None or cfg["pkr"] <= 0:
@@ -366,6 +375,10 @@ def checkout(request: Request, b: Checkout, user: dict = Depends(require_account
     if user.get("plan") == b.plan:
         raise HTTPException(400, f"You are already on the {cfg['name']} plan")
     if not paypak.configured():
+        if not _dev_checkout():
+            raise HTTPException(503, "Payments are not set up on this server yet ("
+                                     + ", ".join(paypak.missing())
+                                     + " missing). A plan starts only after the payment is confirmed.")
         userdb.set_plan(user["email"], b.plan)
         return {"ok": True, "dev": True, "plan": b.plan, "plan_name": cfg["name"],
                 "pkr": cfg["pkr"], "method": b.method,
@@ -460,7 +473,11 @@ def meta():
     plans = {k: {"name": v["name"], "price": {"pkr": v["pkr"], "usd": round(v["pkr"] / 278, 2)},
                  "results": v["searches"], "halls": v["halls"], "note": v["note"]}
              for k, v in qdb.PLANS.items()}
-    return {"vendors": len(rows()), "sections": SECTIONS, "cities": _cache["areas"], "plans": plans}
+    # Whether the hosted checkout can actually open here. The browser shows the pay button only
+    # when this says so, and names the missing keys when it does not - never a silent upgrade.
+    return {"vendors": len(rows()), "sections": SECTIONS, "cities": _cache["areas"], "plans": plans,
+            "pay": {"configured": paypak.configured(), "mode": paypak.MODE,
+                    "missing": paypak.missing()}}
 
 AREA_ALIASES = {
     "pwd": "I-8", "pwd housing society": "I-8", "pwd society": "I-8",
@@ -851,7 +868,8 @@ async def _payload(request: Request) -> dict:
         return {}
 
 def _ipn_data(form: dict) -> dict:
-    """`data` is an array: a nested dict, a JSON string, or PHP-style data[amount] keys."""
+    """`data` is an array: a nested dict, a JSON string, or PHP-style data[amount] keys. A return
+    trip that carries the same fields flat on the query string counts as the same data."""
     d = form.get("data")
     if isinstance(d, dict):
         return d
@@ -860,8 +878,11 @@ def _ipn_data(form: dict) -> dict:
             return json.loads(d)
         except ValueError:
             return {}
-    return {str(k)[5:-1]: v for k, v in form.items()
-            if str(k).startswith("data[") and str(k).endswith("]")}
+    nested = {str(k)[5:-1]: v for k, v in form.items()
+              if str(k).startswith("data[") and str(k).endswith("]")}
+    if nested:
+        return nested
+    return {k: v for k, v in form.items() if k in ("amount", "status", "transaction_id", "txn_id")}
 
 def _amount_matches(p: dict, data: dict) -> bool:
     """The gateway signs the amount it received - it must still be the amount we asked for."""
@@ -917,11 +938,18 @@ async def payment_confirm(request: Request, identifier: str, user: dict = Depend
         qdb.payment_finish(identifier, "expired")
         raise HTTPException(410, "This payment link has expired - start the checkout again")
     form = await _payload(request)
+    # The gateway may hand the browser back a status of its own. A clearly failed answer closes
+    # the payment here instead of letting the UI wait for a confirmation that never comes; any
+    # other value (PayPak sends nothing on a plain success redirect) is treated as success.
+    st = str(form.get("status") or "").strip().lower()
+    if st in ("failed", "fail", "cancel", "cancelled", "declined", "error", "expired"):
+        qdb.payment_finish(identifier, "cancelled" if st.startswith("cancel") else "failed")
+        raise HTTPException(409, f"This payment was {st} - your plan was not changed")
     sent = str(form.get("signature") or "")
     if sent:
         data = _ipn_data(form)
-        if not _amount_matches(p, data) or not paypak.verify(form.get("status") or "success",
-                                                             identifier, sent, data.get("amount", "")):
+        if not _amount_matches(p, data) or not paypak.verify("success", identifier,
+                                                             sent, data.get("amount", "")):
             raise HTTPException(400, "PayPak signature did not match")
     elif paypak.MODE == "live":
         raise HTTPException(403, "Waiting for PayPak to confirm this payment")
