@@ -159,14 +159,13 @@ function StepHall({ q, set, allow, plan, halls, loading, error, onRetry }) {
   const cities = useMemo(() => ["All", ...[...new Set(halls.map((h) => h.city).filter(Boolean))].sort()], [halls]);
   const [city, setCity] = useState("All");
   const [search, setSearch] = useState("");
-  const [waOnly, setWaOnly] = useState(false);
 
   const list = useMemo(
     () =>
       halls
-        .filter((h) => (city === "All" || h.city === city) && h.name.toLowerCase().includes(search.trim().toLowerCase()) && (!waOnly || h.whatsappNumber))
+        .filter((h) => (city === "All" || h.city === city) && h.name.toLowerCase().includes(search.trim().toLowerCase()))
         .sort((a, b) => (b.reviewCount || 0) - (a.reviewCount || 0)),
-    [halls, city, search, waOnly]
+    [halls, city, search]
   );
 
   const pick = (h) => {
@@ -220,9 +219,6 @@ function StepHall({ q, set, allow, plan, halls, loading, error, onRetry }) {
           ))}
         </div>
         <input className="search" placeholder="Search hall name" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search hall" />
-        <button type="button" className={`chip ${waOnly ? "on" : ""}`} onClick={() => setWaOnly(!waOnly)}>
-          WhatsApp available
-        </button>
       </div>
       <div className="halls">
         {list.map((h) => {
@@ -243,11 +239,7 @@ function StepHall({ q, set, allow, plan, halls, loading, error, onRetry }) {
                   ) : (
                     " · No rating yet"
                   )}
-                  {h.phone && !h.whatsappNumber ? <em className="num"> · {h.phone}</em> : null}
                 </small>
-              </span>
-              <span className={`tag ${h.whatsappNumber ? "t-mint" : h.phone ? "t-grey" : "t-rose"}`}>
-                {h.whatsappNumber ? "WhatsApp" : h.phone ? "Phone only" : "No number"}
               </span>
             </button>
           );
