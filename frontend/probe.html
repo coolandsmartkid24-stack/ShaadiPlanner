@@ -1,0 +1,21 @@
+<!doctype html>
+<html><body style="margin:0;background:#000">
+<iframe id="f" src="/" style="width:1440px;height:900px;border:0"></iframe>
+<script>
+const off = new URLSearchParams(location.search).get("off") === "1";
+const f = document.getElementById("f");
+f.addEventListener("load", () => {
+  setTimeout(() => {
+    try {
+      const d = f.contentDocument;
+      if (off) {
+        const s = d.createElement("style");
+        s.textContent = ".sonar-canvas{visibility:hidden !important}";
+        d.head.appendChild(s);
+      }
+      document.title = "ready";
+    } catch (e) { document.title = "ERR " + e.message; }
+  }, 3500);
+});
+</script>
+</body></html>

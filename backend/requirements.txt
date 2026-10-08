@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+python-multipart          # starlette needs it to parse PayPak's form-encoded IPN
+openai>=1.60
+python-dotenv
+reportlab

@@ -1,0 +1,38 @@
+<!doctype html>
+<html><body style="margin:0">
+<iframe id="f" src="/" style="width:1440px;height:900px;border:0"></iframe>
+<pre id="out">pending</pre>
+<script>
+const f = document.getElementById("f");
+f.addEventListener("load", () => {
+  setTimeout(() => {
+    try {
+      const d = f.contentDocument;
+      const cv = d.querySelector(".sonar-canvas");
+      const ctx = cv.getContext("2d");
+      const W = cv.width, H = cv.height;
+      const img = ctx.getImageData(0, 0, W, H).data;
+      const band = (y0, y1) => {
+        let n = 0, tot = 0, maxA = 0;
+        for (let y = Math.floor(H * y0); y < Math.floor(H * y1); y++)
+          for (let x = 0; x < W; x++) {
+            const a = img[(y * W + x) * 4 + 3];
+            tot++;
+            if (a > 0) { n++; if (a > maxA) maxA = a; }
+          }
+        return { cov: +(n / tot).toFixed(4), maxAlpha: maxA };
+      };
+      document.getElementById("out").textContent = JSON.stringify({
+        canvas: { w: W, h: H },
+        logoRow__0_8pct: band(0, 0.08),
+        top_0_20: band(0, 0.20),
+        upper_20_45: band(0.20, 0.45),
+        mid_45_65: band(0.45, 0.65),
+        lower_65_85: band(0.65, 0.85),
+        bottom_85_100: band(0.85, 1.0)
+      }, null, 2);
+    } catch (e) { document.getElementById("out").textContent = "ERR " + e.message; }
+  }, 4500);
+});
+</script>
+</body></html>

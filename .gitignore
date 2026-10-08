@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secrets / local config
+.env
+backend/.env
+
+# Local data / databases
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+
+# Logs
+*.log
+*.err
+*.out
+backend/server.err
+frontend/vite.dev.log
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Caches / temp
+.cache/
+*.tmp
+.turbo/
