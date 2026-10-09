@@ -5,6 +5,5 @@ python-multipart
 pydantic
 openai
 python-dotenv
-reportlab
 psycopg[binary]>=3.2
 psycopg-pool>=3.2

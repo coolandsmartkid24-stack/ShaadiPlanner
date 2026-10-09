@@ -172,28 +172,44 @@ input[type=date]{min-height:49px}
 .why{margin-right:auto;color:var(--muted);font-weight:600;font-size:14px}
 
 /* ---------- review ---------- */
-.rev{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:20px;align-items:start}
+/* The first column is the document's own width: the PDF is captured from .doc, so a fixed 420px
+   means the file wraps the text exactly the way the preview did, on any screen. */
+.rev{display:grid;grid-template-columns:minmax(420px,1.1fr) minmax(0,1fr);gap:20px;align-items:start}
 .send{display:flex;flex-direction:column;gap:14px;min-width:0}
-.doc{background:#fff;color:#111;border:1px solid #ddd;border-radius:6px;padding:26px;box-shadow:var(--shadow);font-size:13px}
+/* .doc is the element the PDF is made of: colours must survive the export pixel for pixel, and no
+   detail row or pill chip may be cut in half by a page break. */
+.doc{width:100%;max-width:420px;background:#fff;color:#111;border:1px solid #ddd;border-radius:6px;padding:26px;box-shadow:var(--shadow);font-size:13px;-webkit-print-color-adjust:exact;print-color-adjust:exact;break-inside:avoid;page-break-inside:avoid}
 .doc .brand{font-size:17px;color:#111}
 .doc .mark{background:#111;color:#fff}
-.doc-h{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:18px}
+.doc-h{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:18px;break-inside:avoid;page-break-inside:avoid}
 .doc-h .brand{flex:none}
 .doc-t{text-align:right;min-width:0}
 .doc-t h3{font-size:23px;font-weight:800;letter-spacing:-.02em;overflow-wrap:anywhere}
 .doc-t small{color:#555}
-.doc-k{display:flex;align-items:center;gap:6px;margin:14px 0 4px;font-size:11.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:#111}
+.doc-k{display:flex;align-items:center;gap:6px;margin:14px 0 4px;font-size:11.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:#111;break-inside:avoid;page-break-inside:avoid}
 .doc-k svg{flex:none;opacity:.7}
 .doc-v{margin:0;font-weight:600;overflow-wrap:anywhere}
 .doc-p{margin:14px 0;line-height:1.6}
 .dt{border-top:2px solid #111;margin-top:8px}
-.dr{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid #e8e8e8}
+.dr{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid #e8e8e8;break-inside:avoid;page-break-inside:avoid}
 .dr>span{display:flex;align-items:center;gap:7px;color:#444;font-weight:600}
 .dr>span svg{flex:none;opacity:.55}
 .dr>b{text-align:right;font-weight:700;overflow-wrap:anywhere}
-.doc-chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 2px}
-.doc-chip{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border:1px solid #e2e2e2;border-radius:999px;background:#fafafa;font-size:12px;font-weight:600}
+.doc-chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 2px;break-inside:avoid;page-break-inside:avoid}
+.doc-chip{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border:1px solid #e2e2e2;border-radius:999px;background:#fafafa;font-size:12px;font-weight:600;break-inside:avoid;page-break-inside:avoid}
 .doc-chip svg{color:#047857;flex:none}
+
+/* Printing the page (Ctrl+P) shows the document only; the buttons never reach the paper and are
+   also skipped by the capture through data-html2canvas-ignore. The document itself is left exactly
+   as the preview draws it - same padding, same colours, same icons. */
+@media print{
+  [data-html2canvas-ignore]{display:none!important}
+  body{background:#fff}
+  .top,.prog,.bar,.sum,.send,.modal,.scrim{display:none!important}
+  .page{padding:0;max-width:none}
+  .wbody,.rev{display:block}
+  .card{border:0;box-shadow:none}
+}
 
 .sendrow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line);flex-wrap:wrap}
 .sendrow>span:first-child{display:flex;flex-direction:column;min-width:0;flex:1 1 160px}

@@ -91,6 +91,12 @@ export function niceDate(d) {
   return isNaN(x) ? d : x.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
 }
 
+// Today as the document prints it - 09 Oct 2026. Built from the browser's local date, never
+// from UTC: the PDF is a capture of this exact line, so preview and file can never disagree.
+export function todayLabel() {
+  return new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
 export function initials(name) {
   return String(name || "")
     .replace(/[^A-Za-z0-9 ]/g, "")

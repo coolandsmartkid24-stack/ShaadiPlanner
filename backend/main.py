@@ -7,18 +7,17 @@ import base64, hashlib, hmac, json, math, os, re, tempfile, threading, time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, quote
 from dotenv import load_dotenv
 load_dotenv()                           # .env first: areas/llm read the environment at import time
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 import areas
 import db
 import llm
 import paypak
-import pdfquote
 import quotations as qdb
 import users as userdb
 
@@ -742,19 +741,13 @@ def _own(email: str, qid: str) -> dict:
         raise HTTPException(404, "Quotation not found")
     return q
 
-def _pdf_response(q: dict, who: dict) -> Response:
-    ids = qdb.hall_ids(q["id"])
-    data = pdfquote.quotation_pdf(q, qdb.hall(ids[0]) if ids else None,
-                                  {"name": who.get("name") or "", "phone": who.get("phone") or ""})
-    return Response(data, media_type="application/pdf",
-                    headers={"Content-Disposition": 'attachment; filename="Shaadi_Quotation.pdf"'})
-
 def signed_url(request: Request, qid: str):
-    """A link the hall can open without an account, valid 30 days. The expiry rides inside sig
-    so the URL stays exactly /q/<id>?sig=..."""
+    """A link the hall can open without an account, valid 30 days. The expiry rides inside sig.
+    It points at the SPA's share view (?share=<id>&sig=...) which renders the quotation with the
+    same <Doc> component the wizard previews - the PDF is captured from that, never drawn twice."""
     exp = int(time.time() + 30 * 86400)
     sig = f"{exp}.{hmac.new(SECRET, f'{qid}.{exp}'.encode(), hashlib.sha256).hexdigest()}"
-    return str(request.base_url).rstrip("/") + f"/q/{qid}?sig={sig}", exp
+    return str(request.base_url).rstrip("/") + f"/?share={qid}&sig={sig}", exp
 
 def _valid_sig(qid: str, sig: str) -> bool:
     try:
@@ -841,20 +834,32 @@ def quotation_share(qid: str, body: dict, request: Request, user: dict = Depends
     return {"hall_id": hall_id, "url": url, "expires_at": exp, "message": text,
             "wa_url": qdb.wa_link(num, text) if num else "", "has_whatsapp": bool(num)}
 
-@app.get("/api/quotations/{qid}/pdf")
-def quotation_pdf_endpoint(qid: str, user: dict = Depends(require_account)):
-    return _pdf_response(_own(user["email"], qid), user)
-
-@app.get("/q/{qid}")
-def public_quotation_pdf(qid: str, sig: str = ""):
-    """The link the hall opens: signed, 30 days, PDF only - no session, no other field."""
+@app.get("/api/quotations/{qid}/public")
+def quotation_public_view(qid: str, sig: str = ""):
+    """The payload behind a hall's link: the quotation and nothing about the account - no session,
+    no phone number, no allowance. The browser renders it with the SAME <Doc> component the wizard
+    previews, so what a hall downloads is what the couple saw on screen."""
     if not _valid_sig(qid, sig):
         raise HTTPException(403, "This link has expired or is not valid")
     q = qdb.find_any(qid)
     if q is None:
         raise HTTPException(404, "Quotation not found")
     owner = userdb.find(q["user_email"]) or {}
-    return _pdf_response(q, {"name": q["host"] or owner.get("name") or "", "phone": owner.get("phone") or ""})
+    halls = [h for h in (qdb.hall(i) for i in qdb.hall_ids(qid)) if h]
+    return {"id": q["id"], "title": q["title"], "host": q["host"], "event_type": q["event_type"],
+            "event_date": q["event_date"], "slot": q["slot"], "time": q["time"],
+            "guests": q["guests"], "menu": q["menu"], "services": q["services"], "notes": q["notes"],
+            "halls": halls, "owner_name": owner.get("name") or ""}
+
+@app.get("/q/{qid}")
+def quotation_share_link(qid: str, sig: str = ""):
+    """Links already sent on WhatsApp point here: same signature, now handed to the SPA's share
+    view, which downloads the PDF straight from its own preview."""
+    if not _valid_sig(qid, sig):
+        raise HTTPException(403, "This link has expired or is not valid")
+    if qdb.find_any(qid) is None:
+        raise HTTPException(404, "Quotation not found")
+    return RedirectResponse(f"/?share={qid}&sig={quote(sig)}", status_code=302)
 
 # ---- payments: PayPak (paybost.com) owns the money, we only own the record ------------------
 #      /api/checkout redirects the browser to the gateway's hosted page; the plan is stored on

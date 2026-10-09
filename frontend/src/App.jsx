@@ -5,6 +5,7 @@ import { api, getSession, setSession, clearSession, onUnauthorized, settlePaymen
 import { newQuotation, passOf, planName } from "./lib.js";
 import Auth from "./Auth.jsx";
 import Home from "./Home.jsx";
+import Share from "./Share.jsx";
 import Wizard from "./Wizard.jsx";
 
 const PAY_KEY = "sp.pending-payment";   // survives the trip to the gateway and back
@@ -45,6 +46,19 @@ const stashOpen = (id) => {
 // A token that came back with /api/me is the fresh one; an older backend does not send one, so
 // the stored token is kept rather than being overwritten with undefined.
 const keepSession = (m) => ({ ...m, token: m.token || getSession()?.token });
+
+// A hall's link is ?share=<id>&sig=<sig> (the signed /q/ path redirects here). It is read once,
+// on the way in, and never needs a session: the quotation is public to whoever holds the sig.
+const readShare = () => {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    const id = p.get("share");
+    const sig = p.get("sig");
+    return id && sig ? { id, sig } : null;
+  } catch {
+    return null;
+  }
+};
 
 function Splash() {
   return (
@@ -94,6 +108,7 @@ export default function App() {
   const [quotes, setQuotes] = useState(null);
   const [quotesErr, setQuotesErr] = useState("");
   const [open, setOpen] = useState(null);       // quotation being edited in the wizard
+  const [shared] = useState(readShare);         // a hall opened a link: render that quotation
   const [paying, setPaying] = useState(null);   // {pass} while PayPak is being asked to confirm
   const settling = useRef(false);
 
@@ -308,7 +323,8 @@ export default function App() {
   };
 
   let view;
-  if (booting) view = <Splash />;
+  if (shared) view = <Share id={shared.id} sig={shared.sig} toast={toast} />;
+  else if (booting) view = <Splash />;
   else if (!user)
     view = (
       <Auth
